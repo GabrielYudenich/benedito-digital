@@ -3,11 +3,14 @@
 import tkinter as tk
 from tkinter import ttk
 
+from core.storage import estimate_lossless_frames_bytes, format_bytes, storage_preflight
+
 
 class ExtractionDialog:
-    def __init__(self, parent, video_info, current_value, start_callback):
+    def __init__(self, parent, video_info, current_value, start_callback, destination_dir=None):
         self.video_info = video_info or {}
         self.start_callback = start_callback
+        self.destination_dir = destination_dir
         self.window = tk.Toplevel(parent)
         self.window.title("Preparar extração de frames")
         self.window.geometry("620x520")
@@ -65,6 +68,17 @@ class ExtractionDialog:
             text="PNG preserva a imagem, mas uma sequência longa pode ocupar muitas vezes o tamanho do vídeo comprimido. A janela de progresso mostrará cada etapa.",
             font=("Segoe UI", 10), fg="#f5f3f7", bg="#332711", wraplength=530, justify=tk.LEFT,
         ).pack(anchor=tk.W, pady=(3, 0))
+        self.space_var = tk.StringVar()
+        self.space_label = tk.Label(
+            warning,
+            textvariable=self.space_var,
+            font=("Segoe UI", 10, "bold"),
+            fg="#fde68a",
+            bg="#332711",
+            wraplength=530,
+            justify=tk.LEFT,
+        )
+        self.space_label.pack(anchor=tk.W, pady=(6, 0))
 
         buttons = tk.Frame(self.window, bg="#17131f")
         buttons.pack(fill=tk.X, side=tk.BOTTOM, padx=24, pady=20)
@@ -78,8 +92,26 @@ class ExtractionDialog:
         count = self.estimate_frame_count(duration, self.fps_var.get(), source_fps)
         if count is None:
             self.estimate_var.set("Quantidade estimada: aguardando um FPS válido")
+            self.space_var.set("Informe um FPS válido para calcular o espaço.")
         else:
             self.estimate_var.set(f"Quantidade estimada: {count:,} frames".replace(",", "."))
+            fps_value = source_fps if self.fps_var.get().strip().lower() in {"original", "orig", "fonte"} else float(self.fps_var.get())
+            estimated = estimate_lossless_frames_bytes(
+                duration,
+                fps_value,
+                int(self.video_info.get("width", 0) or 0),
+                int(self.video_info.get("height", 0) or 0),
+            )
+            if self.destination_dir:
+                preflight = storage_preflight(self.destination_dir, estimated)
+                status = "espaço suficiente" if preflight.enough else "espaço insuficiente"
+                self.space_var.set(
+                    f"Estimativa conservadora: {format_bytes(estimated)} • "
+                    f"livre: {format_bytes(preflight.available_bytes)} • {status}"
+                )
+                self.space_label.config(fg="#86efac" if preflight.enough else "#fca5a5")
+            else:
+                self.space_var.set(f"Estimativa conservadora: {format_bytes(estimated)}")
 
     def _start(self):
         value = self.fps_var.get().strip() or "Original"

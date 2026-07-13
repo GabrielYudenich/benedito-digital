@@ -102,6 +102,11 @@ Um original registrado recebe SHA-256, tamanho e caminho. O arquivo nao e copiad
 o armazenamento de objetos. A verificacao posterior detecta substituicao ou corrupcao
 do material de origem.
 
+Um trecho lossless passa a ser um original de trabalho independente e recebe `provenance`
+com o nome e tamanho da fonte, data de modificacao, inicio, final e codecs. A fonte de 30 GB
+nao entra no historico nem no pacote colaborativo. O segmento usa FFV1 e PCM para evitar
+uma nova perda antes da edicao frame a frame.
+
 ## Sincronizacao e merge local
 
 Pacotes `.bdpack` transferem operacoes e objetos ausentes sem incluir o material

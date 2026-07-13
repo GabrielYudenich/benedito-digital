@@ -18,7 +18,7 @@ em pré-lançamento até que os critérios da primeira versão estável sejam at
 - executar testes guiados com restauradores iniciantes e experientes;
 - validar projetos reais longos, VHS, 8 mm, Super 8, 16 mm e materiais entrelaçados;
 - validar em campo a migração e compatibilidade versionada do formato de projeto;
-- ampliar a recuperação atual com preflight de disco e retomada de exportações interrompidas;
+- ampliar o preflight já usado em importação e frames com retomada de exportações interrompidas;
 - auditar acessibilidade com leitores de tela, navegação completa por teclado e alto contraste;
 - revisar segurança da importação de pacotes, manifests e colaboração em pastas não confiáveis;
 - publicar instalador assinado e documentar reputação no Windows SmartScreen;

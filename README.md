@@ -20,6 +20,8 @@ um projeto.
 A branch `develop` concentra a validação da próxima versão. A fundação atual inclui:
 
 - importação transacional de originais grandes, com SHA-256, progresso e cancelamento;
+- escolha guiada entre importar o filme inteiro ou um trecho lossless com início e final;
+- preflight de espaço para importação e extração de frames antes de tarefas longas;
 - registro de projetos existentes em qualquer pasta local ou compartilhada, sem copiar a mídia;
 - extração de frames em PNG sem perda por FFmpeg;
 - fila de tarefas em segundo plano sem bloquear a interface;
@@ -55,7 +57,7 @@ Guias: [película](docs/film-restoration.md), [colaboração](docs/collaboration
 - assistente de restauração em cinco etapas;
 - Central de Progresso com porcentagem, etapa atual, tempo decorrido e estimativa;
 - cancelamento seguro e opção para continuar trabalhando em segundo plano;
-- preparação visual da extração com FPS detectado e quantidade estimada de frames;
+- preparação visual da extração com FPS, quantidade de frames, espaço estimado e espaço livre;
 - gerenciador visual de branches e histórico por frame;
 - escala de leitura de 90% a 150%.
 

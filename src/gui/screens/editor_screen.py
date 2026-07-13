@@ -31,6 +31,7 @@ from core.jobs import JobManager, JobState
 from core.model_registry import ModelRegistry
 from core.paths import resource_root
 from core.selections import polygon_mask, rectangle_mask, selection_bounds
+from core.storage import estimate_lossless_frames_bytes, require_free_space
 from core.accessibility import AccessibilityPreferences
 from gui.controllers.frame_retouch_controller import FrameRetouchController
 from gui.controllers.film_registration_controller import FilmRegistrationController
@@ -42,6 +43,7 @@ from gui.controllers.project_version_controller import ProjectVersionController
 from gui.dialogs.accessibility_dialog import AccessibilityDialog
 from gui.dialogs.damage_analysis_dialog import DamageAnalysisDialog
 from gui.dialogs.extraction_dialog import ExtractionDialog
+from gui.dialogs.import_video_dialog import ImportVideoDialog
 from gui.dialogs.export_dialog import ExportDialog
 from gui.dialogs.ffmpeg_config import FFmpegConfigDialog
 from gui.dialogs.model_registry_dialog import ModelRegistryDialog
@@ -2546,39 +2548,75 @@ class EditorScreen:
             filetypes=[("Arquivos de vídeo", "*.mp4 *.avi *.mov *.mkv *.wmv *.flv"), ("Todos os arquivos", "*.*")]
         )
 
-        if file_path:
-            self.import_btn.config(state=tk.DISABLED)
+        if not file_path:
+            return
+        self.import_btn.config(state=tk.DISABLED)
 
-            def import_task(context):
-                success = self.project_manager.add_video_to_project(
-                    file_path,
-                    progress_callback=lambda progress: context.report(
-                        progress, "Importando e verificando original..."
-                    ),
-                    cancel_callback=lambda: context.cancellation_requested,
-                )
-                if not success:
-                    context.check_cancelled()
-                    raise RuntimeError("Falha ao importar vídeo")
-                return os.path.basename(file_path)
+        def analyze_task(context):
+            context.report(10, "Lendo duração, resolução e codec...")
+            info = self.video_processor.get_video_info(file_path)
+            context.check_cancelled()
+            info["file_size"] = os.path.getsize(file_path)
+            context.report(100, "Análise concluída")
+            return info
 
-            def import_complete(_video_name):
-                self.load_project_videos()
-                self.status_var.set("Vídeo importado e verificado com sucesso!")
-                self.open_proxy_dialog(_video_name)
-
-            def import_failed(error):
-                messagebox.showerror("Erro", f"Erro ao importar vídeo: {error}")
-
-            job = self._start_ui_job(
-                "Importação",
-                import_task,
-                import_complete,
-                import_failed,
-                lambda: self.import_btn.config(state=tk.NORMAL),
+        def analyze_complete(video_info):
+            ImportVideoDialog(
+                self.root,
+                file_path,
+                video_info,
+                self.project_manager.get_originals_dir(),
+                self._start_video_import,
             )
-            if job is None:
-                self.import_btn.config(state=tk.NORMAL)
+
+        self._start_ui_job(
+            "Analisando mídia",
+            analyze_task,
+            analyze_complete,
+            lambda error: messagebox.showerror(
+                "Erro", f"Não foi possível analisar o vídeo: {error}"
+            ),
+            lambda: self.import_btn.config(state=tk.NORMAL),
+        )
+
+    def _start_video_import(self, import_plan):
+        self.import_btn.config(state=tk.DISABLED)
+
+        def import_task(context):
+            message = (
+                "Criando trecho lossless e verificando..."
+                if import_plan.is_segment
+                else "Importando e verificando filme inteiro..."
+            )
+            success = self.project_manager.add_video_to_project(
+                str(import_plan.source_path),
+                video_name=import_plan.destination_name,
+                progress_callback=lambda progress: context.report(progress, message),
+                cancel_callback=lambda: context.cancellation_requested,
+                import_plan=import_plan,
+                video_processor=self.video_processor,
+            )
+            if not success:
+                context.check_cancelled()
+                raise RuntimeError(
+                    self.project_manager.last_import_error or "Falha ao importar vídeo"
+                )
+            return self.project_manager.last_imported_video_name
+
+        def import_complete(video_name):
+            self.load_project_videos()
+            self.status_var.set("Vídeo importado e verificado com sucesso!")
+            self.open_proxy_dialog(video_name)
+
+        job = self._start_ui_job(
+            "Importação de trecho" if import_plan.is_segment else "Importação completa",
+            import_task,
+            import_complete,
+            lambda error: messagebox.showerror("Erro ao importar", error),
+            lambda: self.import_btn.config(state=tk.NORMAL),
+        )
+        if job is None:
+            self.import_btn.config(state=tk.NORMAL)
 
     def on_media_select(self, event):
         selection = self.media_listbox.curselection()
@@ -5814,6 +5852,7 @@ class EditorScreen:
             messagebox.showwarning("Aviso", "Selecione um vídeo primeiro.")
             return
         originals_dir = self.project_manager.get_originals_dir()
+        frames_dir = self.project_manager.get_frames_dir()
         video_path = os.path.join(originals_dir, self.current_video)
         video_info = self.video_processor.get_video_info(video_path)
 
@@ -5827,6 +5866,7 @@ class EditorScreen:
             video_info,
             self.fps_entry.get().strip() or "Original",
             start_extraction,
+            frames_dir,
         )
 
     def _extract_frames_thread(self):
@@ -5857,6 +5897,15 @@ class EditorScreen:
 
         def extract_task(context):
             try:
+                video_info = self.video_processor.get_video_info(input_path)
+                effective_fps = fps or float(video_info.get("fps", 0) or 0)
+                estimated_bytes = estimate_lossless_frames_bytes(
+                    float(video_info.get("duration", 0) or 0),
+                    effective_fps,
+                    int(video_info.get("width", 0) or 0),
+                    int(video_info.get("height", 0) or 0),
+                )
+                require_free_space(frames_dir, estimated_bytes)
                 success = self.video_processor.extract_frames(
                     input_path,
                     frames_dir,
