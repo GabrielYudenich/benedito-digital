@@ -13,6 +13,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Union
 
+try:
+    from .migrations import (
+        CURRENT_WORKSPACE_SCHEMA,
+        FutureWorkspaceVersion,
+        WorkspaceMigrationError,
+        migrate_workspace,
+    )
+    from .recovery import JsonRecoveryError, atomic_write_json, load_json_with_recovery
+except ImportError:
+    from migrations import (
+        CURRENT_WORKSPACE_SCHEMA,
+        FutureWorkspaceVersion,
+        WorkspaceMigrationError,
+        migrate_workspace,
+    )
+    from recovery import JsonRecoveryError, atomic_write_json, load_json_with_recovery
+
 
 PathLike = Union[str, os.PathLike]
 ProgressCallback = Callable[[float], None]
@@ -33,7 +50,7 @@ class WorkspaceCancelled(WorkspaceError):
 class ProjectWorkspace:
     """Stores local branches, operations and deduplicated binary artifacts."""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = CURRENT_WORKSPACE_SCHEMA
     DEFAULT_BRANCH = "principal"
     BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
@@ -50,6 +67,12 @@ class ProjectWorkspace:
         self.worktrees_dir = self.project_path / "worktrees"
         self.cache_dir = self.project_path / "cache"
         self.exports_dir = self.project_path / "exports"
+        self.recovery_report = {
+            "recovered": False,
+            "source": None,
+            "quarantined": None,
+            "migrations": [],
+        }
         self.data = self._load_or_initialize()
 
     @classmethod
@@ -70,15 +93,38 @@ class ProjectWorkspace:
         (self.exports_dir / "previews").mkdir(parents=True, exist_ok=True)
         (self.exports_dir / "renders").mkdir(parents=True, exist_ok=True)
 
-        if self.workspace_file.exists():
-            data = self._read_json(self.workspace_file)
+        recovery_files_exist = (
+            self.workspace_file.exists()
+            or self.workspace_file.with_name(f"{self.workspace_file.name}.bak").exists()
+            or any(self.metadata_dir.glob(f".{self.workspace_file.name}.*.tmp"))
+        )
+        if recovery_files_exist:
+            try:
+                loaded = load_json_with_recovery(
+                    self.workspace_file,
+                    validator=self._validate_workspace_candidate,
+                    fatal_exceptions=(FutureWorkspaceVersion,),
+                )
+                data, migrations = migrate_workspace(loaded.data, self._now())
+            except (JsonRecoveryError, WorkspaceMigrationError) as error:
+                raise WorkspaceError(str(error)) from error
             self._validate_workspace(data)
             data.setdefault("proxies", {})
+            self.recovery_report = {
+                "recovered": loaded.recovered,
+                "source": loaded.source,
+                "quarantined": str(loaded.quarantined) if loaded.quarantined else None,
+                "migrations": migrations,
+            }
+            if migrations:
+                self._write_workspace(data)
             return data
 
         now = self._now()
         data = {
             "schema_version": self.SCHEMA_VERSION,
+            "format": "benedito-workspace",
+            "schema_migrations": [],
             "active_branch": self.DEFAULT_BRANCH,
             "branches": {
                 self.DEFAULT_BRANCH: {
@@ -865,12 +911,18 @@ class ProjectWorkspace:
     def _validate_workspace(self, data: Dict[str, Any]) -> None:
         if data.get("schema_version") != self.SCHEMA_VERSION:
             raise WorkspaceError("Unsupported workspace schema version")
+        if data.get("format") != "benedito-workspace":
+            raise WorkspaceError("Invalid workspace format")
         branches = data.get("branches")
         active_branch = data.get("active_branch")
         if not isinstance(branches, dict) or active_branch not in branches:
             raise WorkspaceError("Invalid workspace branch data")
         if not isinstance(data.get("originals"), dict):
             raise WorkspaceError("Invalid workspace originals data")
+
+    def _validate_workspace_candidate(self, data: Dict[str, Any]) -> None:
+        migrated, _applied = migrate_workspace(data, self._now())
+        self._validate_workspace(migrated)
 
     @classmethod
     def _validate_branch_name(cls, name: str) -> None:
@@ -896,18 +948,7 @@ class ProjectWorkspace:
 
     @staticmethod
     def _atomic_write_json(path: Path, data: Mapping[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        try:
-            with temporary.open("w", encoding="utf-8", newline="\n") as file_handle:
-                json.dump(data, file_handle, ensure_ascii=False, indent=2)
-                file_handle.write("\n")
-                file_handle.flush()
-                os.fsync(file_handle.fileno())
-            os.replace(temporary, path)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
+        atomic_write_json(path, data)
 
     @staticmethod
     def _now() -> str:

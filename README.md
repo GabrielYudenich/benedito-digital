@@ -38,7 +38,8 @@ A branch `develop` concentra a validação da próxima versão. A fundação atu
 
 Guias: [película](docs/film-restoration.md), [colaboração](docs/collaboration.md),
 [timeline e scopes](docs/timeline.md), [acessibilidade](docs/accessibility.md) e
-[projetos grandes](docs/performance.md).
+[projetos grandes](docs/performance.md). Consulte também
+[recuperação após falhas](docs/recovery.md).
 
 ### Limitações conhecidas
 

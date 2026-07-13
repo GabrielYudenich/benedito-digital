@@ -32,6 +32,7 @@ projeto/
 
 - `project.json` mantem os metadados existentes e a compatibilidade com projetos antigos.
 - `workspace.json` registra branches, ponteiros de historico e originais conhecidos.
+- `workspace.json.bak` preserva a ultima versao confirmada antes de cada gravacao.
 - `history/operations` guarda uma operacao imutavel por arquivo JSON.
 - `objects/sha256` guarda mascaras, tiles e outros artefatos sem duplicacao.
 - `media/originals` guarda materiais imutaveis e `media/proxies` as copias leves.
@@ -78,6 +79,22 @@ mascara PNG exata tambem e armazenada como objeto, preservando edicao e reproduc
 Filtros e restauracoes por intervalo sao divididos em chunks de frames. Cada chunk so e
 marcado como concluido depois que todos os seus frames e artefatos foram salvos. Uma
 tarefa interrompida reutiliza os chunks confirmados e recomeca apenas o chunk incompleto.
+Os checkpoints tambem mantem uma copia `.bak`; se o JSON principal ficar incompleto,
+o Benedito recupera o ultimo chunk confirmado e preserva o arquivo corrompido.
+
+## Versoes e recuperacao
+
+O `workspace.json` usa `schema_version` independente da versao do aplicativo. O schema
+atual e `2`. Projetos no schema `1` sao migrados automaticamente, com registro em
+`schema_migrations`, sem reescrever operacoes, objetos ou originais.
+
+Toda gravacao persistente e feita em arquivo temporario, sincronizada no disco e entao
+substituida atomicamente. Se houver queda de energia entre essas etapas, a abertura tenta,
+nesta ordem, o arquivo principal, uma copia temporaria completa e o backup anterior. O
+arquivo principal invalido recebe o sufixo `.corrupt-<data>` e nao e apagado.
+
+Schemas criados por uma versao futura nao sao rebaixados. O projeto permanece intacto e
+precisa ser aberto por uma versao compativel do Benedito Digital.
 
 ## Originais
 

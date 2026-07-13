@@ -47,6 +47,74 @@ def test_workspace_creates_separated_project_layout(tmp_path):
     assert (workspace.exports_dir / "renders").is_dir()
 
 
+def test_workspace_schema_one_is_migrated_without_losing_history(tmp_path):
+    workspace = ProjectWorkspace.initialize(tmp_path / "project")
+    operation = workspace.commit_operation("frame.note", frame_number=7)
+    legacy = json.loads(workspace.workspace_file.read_text(encoding="utf-8"))
+    legacy["schema_version"] = 1
+    legacy.pop("format")
+    legacy.pop("schema_migrations")
+    workspace.workspace_file.write_text(json.dumps(legacy), encoding="utf-8")
+
+    migrated = ProjectWorkspace.initialize(workspace.project_path)
+
+    assert migrated.data["schema_version"] == 2
+    assert migrated.data["format"] == "benedito-workspace"
+    assert migrated.recovery_report["migrations"] == [2]
+    assert migrated.get_history()[0]["id"] == operation["id"]
+
+
+def test_corrupt_workspace_recovers_previous_atomic_backup(tmp_path):
+    workspace = ProjectWorkspace.initialize(tmp_path / "project")
+    workspace.create_branch("tratamento")
+    workspace.workspace_file.write_text("{interrompido", encoding="utf-8")
+
+    recovered = ProjectWorkspace.initialize(workspace.project_path)
+
+    assert recovered.recovery_report["recovered"] is True
+    assert recovered.recovery_report["source"] == "backup"
+    assert [branch["name"] for branch in recovered.list_branches()] == ["principal"]
+    assert recovered.workspace_file.with_name("workspace.json.bak").is_file()
+    assert recovered.recovery_report["quarantined"]
+    assert os.path.isfile(recovered.recovery_report["quarantined"])
+
+
+def test_interrupted_workspace_save_recovers_complete_temporary_copy(tmp_path):
+    workspace = ProjectWorkspace.initialize(tmp_path / "project")
+    pending = json.loads(workspace.workspace_file.read_text(encoding="utf-8"))
+    pending["branches"]["resgate"] = {
+        "head": None,
+        "created_at": pending["created_at"],
+        "source_branch": "principal",
+        "frame_statuses": {},
+    }
+    temporary = workspace.workspace_file.with_name(".workspace.json.resgate.tmp")
+    temporary.write_text(json.dumps(pending), encoding="utf-8")
+    workspace.workspace_file.write_text("", encoding="utf-8")
+
+    recovered = ProjectWorkspace.initialize(workspace.project_path)
+
+    assert recovered.recovery_report["source"] == "temporary"
+    assert {branch["name"] for branch in recovered.list_branches()} == {
+        "principal",
+        "resgate",
+    }
+    assert not temporary.exists()
+
+
+def test_future_workspace_schema_is_not_silently_downgraded(tmp_path):
+    workspace = ProjectWorkspace.initialize(tmp_path / "project")
+    workspace.create_branch("backup-existente")
+    future = json.loads(workspace.workspace_file.read_text(encoding="utf-8"))
+    future["schema_version"] = 999
+    workspace.workspace_file.write_text(json.dumps(future), encoding="utf-8")
+
+    with pytest.raises(WorkspaceError, match="suporta até"):
+        ProjectWorkspace.initialize(workspace.project_path)
+
+    assert json.loads(workspace.workspace_file.read_text(encoding="utf-8"))["schema_version"] == 999
+
+
 def test_branches_share_history_then_diverge(tmp_path):
     workspace = ProjectWorkspace.initialize(tmp_path / "project")
     first = workspace.commit_operation(

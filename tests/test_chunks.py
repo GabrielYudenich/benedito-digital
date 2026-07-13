@@ -73,3 +73,25 @@ def test_mismatched_checkpoint_fails_safely(tmp_path):
 def test_invalid_chunk_size_is_rejected():
     with pytest.raises(ValueError):
         ChunkedFrameRunner(chunk_size=0)
+
+
+def test_corrupt_checkpoint_recovers_last_confirmed_chunk(tmp_path):
+    runner = ChunkedFrameRunner(chunk_size=2)
+    checkpoint = tmp_path / "checkpoint.json"
+    first = run_job(runner, list(range(4)), lambda _index, _item: None, checkpoint)
+    assert first.state == JobState.COMPLETED
+    checkpoint.write_text("{queda-de-energia", encoding="utf-8")
+    resumed_items = []
+
+    resumed = run_job(
+        runner,
+        list(range(4)),
+        lambda _index, item: resumed_items.append(item),
+        checkpoint,
+    )
+
+    assert resumed.state == JobState.COMPLETED
+    assert resumed_items == [2, 3]
+    assert resumed.result == {"processed": 2, "skipped": 2, "total": 4}
+    assert runner.last_recovery is not None
+    assert runner.last_recovery.source == "backup"

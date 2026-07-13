@@ -17,6 +17,8 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - histograma RGB, waveform, vectorscope e preferências de acessibilidade;
 - registro compacto de modelos e pesos U-Net Dust com créditos e hashes;
 - build MSI, validação de release, manifesto de atualização e workflows GitHub Actions.
+- migração versionada de workspaces e estados visuais antigos;
+- recuperação automática de JSON e checkpoints após gravação interrompida, com backup e quarentena.
 
 ### Alterado
 

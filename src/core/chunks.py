@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import os
-import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from .jobs import JobContext
+from lib.modules.project.recovery import (
+    JsonRecoveryError,
+    atomic_write_json,
+    load_json_with_recovery,
+)
 
 
 PathLike = Union[str, os.PathLike]
@@ -27,6 +30,7 @@ class ChunkedFrameRunner:
         if chunk_size < 1:
             raise ValueError("Chunk size must be positive")
         self.chunk_size = chunk_size
+        self.last_recovery = None
 
     def run(
         self,
@@ -91,8 +95,14 @@ class ChunkedFrameRunner:
                 "completed_through": 0,
             }
 
-        with checkpoint_path.open("r", encoding="utf-8") as file_handle:
-            checkpoint = json.load(file_handle)
+        try:
+            loaded = load_json_with_recovery(checkpoint_path)
+        except JsonRecoveryError as error:
+            raise CheckpointMismatch(
+                "Checkpoint is damaged and no valid recovery copy exists"
+            ) from error
+        checkpoint = loaded.data
+        self.last_recovery = loaded if loaded.recovered else None
         expected = (
             checkpoint.get("schema_version") == self.SCHEMA_VERSION
             and checkpoint.get("fingerprint") == fingerprint
@@ -107,15 +117,4 @@ class ChunkedFrameRunner:
 
     @staticmethod
     def _atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        try:
-            with temporary.open("w", encoding="utf-8", newline="\n") as file_handle:
-                json.dump(data, file_handle, ensure_ascii=False, indent=2)
-                file_handle.write("\n")
-                file_handle.flush()
-                os.fsync(file_handle.fileno())
-            os.replace(temporary, path)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
+        atomic_write_json(path, data)

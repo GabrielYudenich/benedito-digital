@@ -29,6 +29,8 @@ src/lib/modules/*
 src/lib/modules/project/*
 !src/lib/modules/project/workspace.py
 !src/lib/modules/project/manage.py
+!src/lib/modules/project/migrations.py
+!src/lib/modules/project/recovery.py
 !src/lib/modules/project/state/
 src/lib/modules/project/state/*
 !src/lib/modules/project/state/__init__.py
