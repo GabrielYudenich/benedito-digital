@@ -1,0 +1,60 @@
+name: Relatar um defeito
+description: Informe um comportamento reproduzível sem publicar mídia privada.
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: Obrigado pelo relato. Para vulnerabilidades, use Security Advisories em vez deste formulário.
+  - type: input
+    id: version
+    attributes:
+      label: Versão ou commit
+      placeholder: develop / hash do commit / versão exibida
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: Sistema operacional
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux
+        - Outro
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Comportamento observado
+      description: Remova caminhos pessoais, frames, credenciais e dados do acervo.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Passos para reproduzir
+      placeholder: "1. Abrir...\n2. Selecionar...\n3. Executar..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamento esperado
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Contexto técnico não sensível
+      description: Informe codec, resolução, duração aproximada, CPU/GPU e mensagem de erro, se relevante.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmações
+      options:
+        - label: Procurei issues semelhantes.
+          required: true
+        - label: Não incluí mídia privada, dados pessoais ou uma vulnerabilidade explorável.
+          required: true

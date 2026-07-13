@@ -1,0 +1,35 @@
+name: Propor uma funcionalidade
+description: Sugira uma melhoria alinhada à preservação audiovisual e à acessibilidade.
+title: "[Proposta]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema a resolver
+      description: Descreva a necessidade antes da solução.
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Fluxo de trabalho desejado
+      description: Explique como iniciantes e profissionais usariam o recurso.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas
+  - type: textarea
+    id: risks
+    attributes:
+      label: Impactos e riscos
+      description: Considere original imutável, desempenho, acessibilidade, privacidade e compatibilidade.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmações
+      options:
+        - label: Consultei o roadmap e procurei propostas semelhantes.
+          required: true
