@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 import threading
+import time
 import traceback
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class JobState(str, Enum):
@@ -95,6 +100,13 @@ class JobManager:
             job.listeners.append(on_update)
         with self._lock:
             self._jobs[job_id] = job
+        LOGGER.info(
+            "Job enfileirado: id=%s nome=%r tarefa=%s.%s",
+            job_id,
+            snapshot.name,
+            getattr(task, "__module__", "desconhecido"),
+            getattr(task, "__qualname__", repr(task)),
+        )
         self._notify(job)
 
         thread = threading.Thread(
@@ -112,6 +124,12 @@ class JobManager:
             if job.snapshot.state not in {JobState.QUEUED, JobState.RUNNING}:
                 return False
             job.cancel_event.set()
+            LOGGER.warning(
+                "Cancelamento solicitado: id=%s nome=%r progresso=%.2f",
+                job.snapshot.id,
+                job.snapshot.name,
+                job.snapshot.progress,
+            )
             return True
 
     def get(self, job_id: str) -> JobSnapshot:
@@ -130,10 +148,12 @@ class JobManager:
         return self.get(job_id)
 
     def _run(self, job: _Job, task: Callable[[JobContext], Any]) -> None:
+        started = time.perf_counter()
         try:
             if job.cancel_event.is_set():
                 raise JobCancelled("Task cancelled")
             self._update(job, state=JobState.RUNNING, started_at=self._now())
+            LOGGER.info("Job iniciado: id=%s nome=%r", job.snapshot.id, job.snapshot.name)
             context = JobContext(job.cancel_event, lambda value, message: self._progress(job, value, message))
             result = task(context)
             context.check_cancelled()
@@ -144,9 +164,28 @@ class JobManager:
                 result=result,
                 finished_at=self._now(),
             )
+            LOGGER.info(
+                "Job concluído: id=%s nome=%r duração=%.3fs resultado=%s",
+                job.snapshot.id,
+                job.snapshot.name,
+                time.perf_counter() - started,
+                type(result).__name__,
+            )
         except JobCancelled:
             self._update(job, state=JobState.CANCELLED, finished_at=self._now())
+            LOGGER.warning(
+                "Job cancelado: id=%s nome=%r duração=%.3fs",
+                job.snapshot.id,
+                job.snapshot.name,
+                time.perf_counter() - started,
+            )
         except Exception as error:
+            LOGGER.exception(
+                "Job falhou: id=%s nome=%r duração=%.3fs",
+                job.snapshot.id,
+                job.snapshot.name,
+                time.perf_counter() - started,
+            )
             self._update(
                 job,
                 state=JobState.FAILED,
@@ -159,6 +198,13 @@ class JobManager:
 
     def _progress(self, job: _Job, progress: float, message: str) -> None:
         normalized = max(0.0, min(100.0, float(progress)))
+        LOGGER.debug(
+            "Progresso do job: id=%s nome=%r progresso=%.2f mensagem=%r",
+            job.snapshot.id,
+            job.snapshot.name,
+            normalized,
+            message,
+        )
         self._update(job, progress=normalized, message=message)
 
     def _update(self, job: _Job, **changes: Any) -> None:
@@ -175,7 +221,12 @@ class JobManager:
             try:
                 listener(snapshot)
             except Exception:
-                pass
+                LOGGER.exception(
+                    "Listener de job falhou: id=%s nome=%r listener=%r",
+                    snapshot.id,
+                    snapshot.name,
+                    listener,
+                )
 
     def _get_job(self, job_id: str) -> _Job:
         with self._lock:

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
+import time
+from collections import deque
 from functools import lru_cache
 from fractions import Fraction
 from pathlib import Path
@@ -17,6 +20,7 @@ from core.paths import executable_path
 
 ProgressCallback = Callable[[float], None]
 CancellationCallback = Callable[[], bool]
+LOGGER = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=16)
@@ -362,6 +366,12 @@ class VideoProcessor:
         progress_callback: Optional[ProgressCallback],
         cancel_callback: Optional[CancellationCallback],
     ) -> bool:
+        started = time.perf_counter()
+        LOGGER.info(
+            "FFmpeg iniciado: duração_esperada=%.3fs comando=%r",
+            duration,
+            list(command),
+        )
         process = subprocess.Popen(
             list(command),
             stdout=subprocess.PIPE,
@@ -371,16 +381,19 @@ class VideoProcessor:
             errors="replace",
             creationflags=self._creation_flags(),
         )
-        output_lines = []
+        LOGGER.debug("Processo FFmpeg criado: pid=%s", process.pid)
+        output_lines = deque(maxlen=20)
         try:
             if process.stdout is None:
                 raise RuntimeError("FFmpeg progress stream is unavailable")
             for raw_line in process.stdout:
                 if cancel_callback and cancel_callback():
+                    LOGGER.warning("Cancelando FFmpeg: pid=%s", process.pid)
                     self._stop_process(process)
                     raise ProcessingCancelled("Video processing cancelled")
                 line = raw_line.strip()
                 output_lines.append(line)
+                LOGGER.debug("FFmpeg pid=%s | %s", process.pid, line)
                 key, separator, value = line.partition("=")
                 if not separator:
                     continue
@@ -391,12 +404,31 @@ class VideoProcessor:
                     progress_callback(100.0)
             return_code = process.wait()
             if return_code != 0:
-                error = "\n".join(output_lines[-20:])
+                error = "\n".join(output_lines)
                 raise RuntimeError(error or f"FFmpeg exited with code {return_code}")
             if progress_callback:
                 progress_callback(100.0)
+            LOGGER.info(
+                "FFmpeg concluído: pid=%s retorno=%d duração=%.3fs",
+                process.pid,
+                return_code,
+                time.perf_counter() - started,
+            )
             return True
+        except ProcessingCancelled:
+            LOGGER.warning(
+                "FFmpeg cancelado: pid=%s duração=%.3fs",
+                process.pid,
+                time.perf_counter() - started,
+            )
+            raise
         except BaseException:
+            LOGGER.exception(
+                "FFmpeg falhou: pid=%s duração=%.3fs últimas_linhas=%r",
+                process.pid,
+                time.perf_counter() - started,
+                list(output_lines),
+            )
             if process.poll() is None:
                 self._stop_process(process)
             raise
@@ -473,14 +505,17 @@ class VideoProcessor:
         return int(self._probe_video(video_path).get("total_frames", 0))
 
     def _probe_video(self, video_path: str) -> Dict:
+        command = [
+            executable_path("ffprobe"), "-v", "error", "-select_streams", "v:0",
+            "-show_entries",
+            "stream=width,height,r_frame_rate,codec_name,bit_rate,nb_frames,duration:format=duration",
+            "-of", "json", video_path,
+        ]
+        started = time.perf_counter()
+        LOGGER.info("FFprobe iniciado: comando=%r", command)
         try:
             result = subprocess.run(
-                [
-                    executable_path("ffprobe"), "-v", "error", "-select_streams", "v:0",
-                    "-show_entries",
-                    "stream=width,height,r_frame_rate,codec_name,bit_rate,nb_frames,duration:format=duration",
-                    "-of", "json", video_path,
-                ],
+                command,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -488,6 +523,12 @@ class VideoProcessor:
                 creationflags=self._creation_flags(),
             )
             if result.returncode != 0:
+                LOGGER.error(
+                    "FFprobe retornou erro: retorno=%d duração=%.3fs stderr=%r",
+                    result.returncode,
+                    time.perf_counter() - started,
+                    result.stderr,
+                )
                 return {}
             probe = json.loads(result.stdout)
             stream = (probe.get("streams") or [{}])[0]
@@ -500,7 +541,7 @@ class VideoProcessor:
             total_frames = int(stream.get("nb_frames") or 0)
             if total_frames == 0 and duration > 0 and fps > 0:
                 total_frames = round(duration * fps)
-            return {
+            info = {
                 "duration": duration,
                 "width": int(stream.get("width") or 0),
                 "height": int(stream.get("height") or 0),
@@ -509,7 +550,18 @@ class VideoProcessor:
                 "bit_rate": int(stream.get("bit_rate") or 0),
                 "total_frames": total_frames,
             }
+            LOGGER.info(
+                "FFprobe concluído: duração=%.3fs metadados=%r",
+                time.perf_counter() - started,
+                info,
+            )
+            return info
         except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError):
+            LOGGER.exception(
+                "FFprobe falhou: duração=%.3fs caminho=%r",
+                time.perf_counter() - started,
+                video_path,
+            )
             return {}
 
     def process_frames_batch(

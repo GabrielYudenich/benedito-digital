@@ -5,23 +5,29 @@ Centralized logging with file output and console display
 
 import logging
 import os
+import sys
 from datetime import datetime
 from typing import Optional
 
 class BeneditoLogger:
     """Centralized logging system"""
 
-    def __init__(self, name: str = "BeneditoDigital", log_dir: str = "logs"):
+    def __init__(
+        self,
+        name: str = "BeneditoDigital",
+        log_dir: Optional[str] = "logs",
+        enabled: Optional[bool] = None,
+    ):
         self.name = name
         self.log_dir = log_dir
+        self.enabled = (
+            not bool(getattr(sys, "frozen", False)) if enabled is None else enabled
+        )
         self.logger = None
         self.setup_logger()
 
     def setup_logger(self):
         """Setup logger with file and console handlers"""
-        # Create logs directory if it doesn't exist
-        os.makedirs(self.log_dir, exist_ok=True)
-
         # Create logger
         self.logger = logging.getLogger(self.name)
         self.logger.setLevel(logging.DEBUG)
@@ -30,6 +36,19 @@ class BeneditoLogger:
         for handler in self.logger.handlers[:]:
             self.logger.removeHandler(handler)
             handler.close()
+
+        if not self.enabled:
+            self.logger.addHandler(logging.NullHandler())
+            self.logger.propagate = False
+            return
+
+        if self.log_dir is None:
+            self.logger.addHandler(logging.NullHandler())
+            self.logger.propagate = True
+            return
+
+        os.makedirs(self.log_dir, exist_ok=True)
+        self.logger.propagate = False
 
         # Create formatters
         file_formatter = logging.Formatter(
@@ -113,11 +132,15 @@ class BeneditoLogger:
 
     def log_error_with_traceback(self, error: Exception, context: str):
         """Log error with full traceback"""
-        self.error(f"Error in {context}: {str(error)}")
-        self.debug(f"Traceback: {error.__traceback__}")
+        self.logger.error(
+            "Error in %s: %s",
+            context,
+            error,
+            exc_info=(type(error), error, error.__traceback__),
+        )
 
 # Global logger instance
-logger = BeneditoLogger()
+logger = BeneditoLogger(log_dir=None)
 
 def get_logger() -> BeneditoLogger:
     """Get the global logger instance"""

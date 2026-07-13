@@ -253,6 +253,7 @@ __marimo__/
 
 projects/*
 .benedito/memoria-local.md
+.benedito/logs/
 vendor/ffmpeg/
 
 # Pesos locais e legado anterior ao registro nativo
