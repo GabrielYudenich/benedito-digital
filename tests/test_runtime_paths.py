@@ -7,7 +7,13 @@ SRC_DIR = os.path.join(ROOT, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from core.paths import default_projects_dir, executable_path, resource_path, resource_root
+from core.paths import (
+    default_models_dir,
+    default_projects_dir,
+    executable_path,
+    resource_path,
+    resource_root,
+)
 
 
 def test_source_checkout_paths_resolve_from_repository():
@@ -23,3 +29,10 @@ def test_bundled_ffmpeg_is_preferred_when_available(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
 
     assert executable_path("ffmpeg") == str(binary.resolve())
+
+
+def test_optional_models_directory_can_be_configured(monkeypatch, tmp_path):
+    target = tmp_path / "modelos locais"
+    monkeypatch.setenv("BENEDITO_MODELS_DIR", str(target))
+
+    assert default_models_dir() == target.resolve()

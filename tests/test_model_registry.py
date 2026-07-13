@@ -59,3 +59,14 @@ def test_imports_weight_transactionally_with_checksum(tmp_path):
 
     assert record.sha256 == hashlib.sha256(b"model-weight").hexdigest()
     assert ModelRegistry.verify_weight(record.path, record.sha256)
+
+
+def test_official_registry_exposes_ltx_as_optional_not_bundled():
+    registry = ModelRegistry(ROOT + "/models/registry.json", [])
+
+    package = next(item for item in registry.optional_catalog() if item.id == "ltx-2.3")
+
+    assert package.install_policy == "optional-after-install"
+    assert package.status == "experimental-planned"
+    assert "47" in package.minimum_download
+    assert package.source == "https://github.com/Lightricks/LTX-2"
