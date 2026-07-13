@@ -10,6 +10,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      SIGNING_ENABLED: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,7 +30,7 @@ jobs:
         shell: pwsh
         run: .\scripts\build_windows.ps1 -SkipMsi
       - name: Assinar executável
-        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        if: env.SIGNING_ENABLED == 'true'
         shell: pwsh
         env:
           CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
@@ -42,7 +44,7 @@ jobs:
         shell: pwsh
         run: .\scripts\build_windows.ps1 -SkipTests -SkipApp
       - name: Assinar MSI
-        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        if: env.SIGNING_ENABLED == 'true'
         shell: pwsh
         env:
           CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
@@ -53,11 +55,11 @@ jobs:
           .\scripts\sign_windows_release.ps1 -CertificatePath $Certificate -CertificatePassword $env:CERTIFICATE_PASSWORD -Target msi
           Remove-Item -LiteralPath $Certificate -Force
       - name: Verificar MSI
-        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 == '' }}
+        if: env.SIGNING_ENABLED != 'true'
         shell: pwsh
         run: .\scripts\verify_windows_release.ps1
       - name: Verificar MSI assinado
-        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        if: env.SIGNING_ENABLED == 'true'
         shell: pwsh
         run: .\scripts\verify_windows_release.ps1 -RequireSignature
       - name: Criar manifesto
