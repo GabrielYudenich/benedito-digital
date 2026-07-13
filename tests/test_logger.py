@@ -21,3 +21,16 @@ def test_reconfiguring_logger_closes_previous_file_handler(tmp_path):
     BeneditoLogger(name=name, log_dir=str(tmp_path / "second"))
 
     assert previous.stream is None
+
+
+def test_disabled_logger_does_not_create_production_directory(tmp_path):
+    destination = tmp_path / "production"
+
+    instance = BeneditoLogger(
+        name="BeneditoDigitalProductionTest",
+        log_dir=str(destination),
+        enabled=False,
+    )
+
+    assert not destination.exists()
+    assert any(isinstance(handler, logging.NullHandler) for handler in instance.logger.handlers)
