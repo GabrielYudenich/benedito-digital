@@ -139,6 +139,63 @@ class VideoProcessor:
         command.extend(["-c:a", "aac", "-b:a", "128k", "-y", output_path])
         return command
 
+    def create_lossless_segment(
+        self,
+        input_path: str,
+        output_path: str,
+        start_time: float,
+        end_time: float,
+        progress_callback: Optional[ProgressCallback] = None,
+        cancel_callback: Optional[CancellationCallback] = None,
+    ) -> bool:
+        """Create an exact intra-frame FFV1 segment for restoration work."""
+        if start_time < 0 or end_time <= start_time:
+            raise ValueError("Invalid segment range")
+        duration = end_time - start_time
+        command = self._build_lossless_segment_command(
+            input_path, output_path, start_time, end_time
+        )
+        return self._run_ffmpeg(
+            command, duration, progress_callback, cancel_callback
+        )
+
+    def _build_lossless_segment_command(
+        self, input_path: str, output_path: str, start_time: float, end_time: float
+    ) -> List[str]:
+        duration = end_time - start_time
+        command = self._ffmpeg_prefix()
+        command.extend(
+            [
+                "-i",
+                input_path,
+                "-ss",
+                str(start_time),
+                "-t",
+                str(duration),
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a?",
+                "-map_metadata",
+                "0",
+                "-c:v",
+                "ffv1",
+                "-level",
+                "3",
+                "-g",
+                "1",
+                "-slicecrc",
+                "1",
+                "-c:a",
+                "pcm_s24le",
+                "-avoid_negative_ts",
+                "make_zero",
+                "-y",
+                output_path,
+            ]
+        )
+        return command
+
     def extract_frames(
         self,
         input_path: str,

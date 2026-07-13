@@ -8,11 +8,11 @@ import pytest
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-PROJECT_DIR = os.path.join(ROOT, "src", "lib", "modules", "project")
-if PROJECT_DIR not in sys.path:
-    sys.path.insert(0, PROJECT_DIR)
+SRC_DIR = os.path.join(ROOT, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
-from workspace import (
+from lib.modules.project.workspace import (
     InvalidBranchName,
     ProjectWorkspace,
     WorkspaceCancelled,
@@ -308,10 +308,22 @@ def test_original_is_registered_and_verified_without_copying(tmp_path):
     assert record["path"] == "media/originals/scan.mov"
     assert workspace.verify_original(record["sha256"])
     assert progress[-1] == 100.0
-
     original.write_bytes(b"changed source")
     assert not workspace.verify_original(record["sha256"])
 
+
+def test_original_hashing_can_be_cancelled_between_chunks(tmp_path):
+    workspace = ProjectWorkspace.initialize(tmp_path / "project")
+    original = tmp_path / "large.mov"
+    original.write_bytes(b"a" * 64)
+    checks = iter((False, True))
+
+    with pytest.raises(WorkspaceCancelled, match="verification cancelled"):
+        workspace.hash_file(
+            original,
+            chunk_size=32,
+            cancel_callback=lambda: next(checks, True),
+        )
 
 def test_original_import_copies_and_hashes_in_one_pass(tmp_path):
     workspace = ProjectWorkspace.initialize(tmp_path / "project")

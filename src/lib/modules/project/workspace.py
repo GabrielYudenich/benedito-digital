@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Union
 
+from core.storage import require_free_space
+
 try:
     from .migrations import (
         CURRENT_WORKSPACE_SCHEMA,
@@ -751,19 +753,25 @@ class ProjectWorkspace:
         self,
         source_path: PathLike,
         progress_callback: Optional[ProgressCallback] = None,
+        provenance: Optional[Mapping[str, Any]] = None,
+        cancel_callback: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
         """Register an immutable source without duplicating it in the object store."""
         source = Path(source_path).resolve()
         if not source.is_file():
             raise WorkspaceError(f"Original does not exist: {source}")
 
-        digest = self.hash_file(source, progress_callback)
+        digest = self.hash_file(
+            source, progress_callback, cancel_callback=cancel_callback
+        )
         record = {
             "sha256": digest,
             "size": source.stat().st_size,
             "path": self._portable_path(source),
             "registered_at": self._now(),
         }
+        if provenance:
+            record["provenance"] = dict(provenance)
         self.data["originals"][digest] = record
         self._save()
         return record
@@ -795,6 +803,7 @@ class ProjectWorkspace:
         temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
         digest = hashlib.sha256()
         total_size = source.stat().st_size
+        require_free_space(destination_dir, total_size)
         processed = 0
         try:
             with source.open("rb") as input_file, temporary.open("xb") as output_file:
@@ -874,6 +883,7 @@ class ProjectWorkspace:
         path: PathLike,
         progress_callback: Optional[ProgressCallback] = None,
         chunk_size: int = 8 * 1024 * 1024,
+        cancel_callback: Optional[Callable[[], bool]] = None,
     ) -> str:
         """Hash a file incrementally without loading it into memory."""
         source = Path(path)
@@ -883,6 +893,8 @@ class ProjectWorkspace:
 
         with source.open("rb") as file_handle:
             while True:
+                if cancel_callback and cancel_callback():
+                    raise WorkspaceCancelled("Original verification cancelled")
                 chunk = file_handle.read(chunk_size)
                 if not chunk:
                     break

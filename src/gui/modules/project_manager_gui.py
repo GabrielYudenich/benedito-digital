@@ -5,12 +5,15 @@ Enhanced project management with GUI integration
 
 import os
 import json
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from lib.modules.project.manage import ProjectManager as BaseProjectManager
 from lib.modules.project.workspace import ProjectWorkspace
+from core.media_import import MediaImportPlan
+from core.storage import require_free_space
 
 class ProjectManagerGUI(BaseProjectManager):
     """Enhanced Project Manager with GUI-specific features"""
@@ -21,6 +24,8 @@ class ProjectManagerGUI(BaseProjectManager):
         self.current_project_path: Optional[str] = None
         self.workspace = None
         self.last_project_notice: Optional[Dict] = None
+        self.last_imported_video_name: Optional[str] = None
+        self.last_import_error: Optional[str] = None
 
     @property
     def external_projects_registry(self) -> Path:
@@ -236,12 +241,16 @@ class ProjectManagerGUI(BaseProjectManager):
         return None
 
     def add_video_to_project(self, video_path: str, video_name: str = None,
-                             progress_callback=None, cancel_callback=None) -> bool:
+                             progress_callback=None, cancel_callback=None,
+                             import_plan: MediaImportPlan = None,
+                             video_processor=None) -> bool:
         """Add video to current project"""
         if not self.current_project:
             return False
 
         try:
+            self.last_import_error = None
+            self.last_imported_video_name = None
             # Generate video name if not provided
             if video_name is None:
                 video_name = os.path.basename(video_path)
@@ -249,7 +258,57 @@ class ProjectManagerGUI(BaseProjectManager):
             if self.workspace is None and ProjectWorkspace is not None:
                 self.workspace = ProjectWorkspace.initialize(self.current_project_path)
 
-            if self.workspace is not None:
+            if self.workspace is not None and import_plan and import_plan.is_segment:
+                if video_processor is None or import_plan.end_time is None:
+                    raise ValueError("Processador de vídeo indisponível para o trecho")
+                video_name = import_plan.destination_name
+                destination = Path(self.workspace.originals_dir) / video_name
+                if destination.exists():
+                    raise FileExistsError(f"Já existe um vídeo chamado {video_name}")
+                require_free_space(destination.parent, import_plan.estimated_bytes)
+                temporary = destination.with_name(
+                    f".{destination.stem}.{uuid.uuid4().hex}.mkv"
+                )
+                try:
+                    try:
+                        success = video_processor.create_lossless_segment(
+                            str(import_plan.source_path),
+                            str(temporary),
+                            import_plan.start_time,
+                            import_plan.end_time,
+                            progress_callback=(
+                                (lambda value: progress_callback(value * 0.85))
+                                if progress_callback else None
+                            ),
+                            cancel_callback=cancel_callback,
+                        )
+                        if not success:
+                            raise RuntimeError("FFmpeg não conseguiu gerar o trecho")
+                        os.replace(temporary, destination)
+                        self.workspace.register_original(
+                            destination,
+                            progress_callback=(
+                                (lambda value: progress_callback(85 + value * 0.15))
+                                if progress_callback else None
+                            ),
+                            provenance={
+                                "kind": "lossless-segment",
+                                "source_name": import_plan.source_path.name,
+                                "source_size": import_plan.source_path.stat().st_size,
+                                "source_modified_ns": import_plan.source_path.stat().st_mtime_ns,
+                                "start_time": import_plan.start_time,
+                                "end_time": import_plan.end_time,
+                                "video_codec": "ffv1",
+                                "audio_codec": "pcm_s24le",
+                            },
+                            cancel_callback=cancel_callback,
+                        )
+                    except Exception:
+                        destination.unlink(missing_ok=True)
+                        raise
+                finally:
+                    temporary.unlink(missing_ok=True)
+            elif self.workspace is not None:
                 self.workspace.import_original(
                     video_path,
                     destination_name=video_name,
@@ -264,10 +323,12 @@ class ProjectManagerGUI(BaseProjectManager):
 
             # Update project metadata
             self._update_project_videos_list()
+            self.last_imported_video_name = video_name
 
             return True
 
         except Exception as e:
+            self.last_import_error = str(e)
             print(f"Error adding video to project: {e}")
             return False
 
