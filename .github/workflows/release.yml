@@ -3,33 +3,52 @@ name: Release Windows
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
+    name: Gerar e validar MSI
     runs-on: windows-latest
+    timeout-minutes: 90
     env:
       SIGNING_ENABLED: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - name: Baixar código
+        uses: actions/checkout@v7
+      - name: Preparar Python
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
-      - run: python -m venv venv
-      - run: .\venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-build.txt
-      - name: Conferir versão da tag
+      - name: Preparar ambiente de build
+        run: |
+          python -m venv venv
+          .\venv\Scripts\python.exe -m pip install --disable-pip-version-check -r requirements.txt -r requirements-build.txt
+      - name: Conferir versão
+        id: version
         shell: pwsh
         run: |
-          $Version = "${{ github.ref_name }}".TrimStart('v')
           $Configured = (Get-Content config.json -Raw | ConvertFrom-Json).version
-          if ($Version -ne $Configured) { throw "Tag $Version difere de config.json $Configured" }
-      - name: Gerar MSI
+          if ("${{ github.event_name }}" -eq "push") {
+            $Tagged = "${{ github.ref_name }}".TrimStart('v')
+            if ($Tagged -ne $Configured) {
+              throw "Tag $Tagged difere de config.json $Configured"
+            }
+          }
+          "version=$Configured" >> $env:GITHUB_OUTPUT
+      - name: Gerar aplicativo
         shell: pwsh
         run: .\scripts\build_windows.ps1 -SkipMsi
-      - name: Assinar executável
+      - name: Assinar executáveis
         if: env.SIGNING_ENABLED == 'true'
         shell: pwsh
         env:
@@ -37,10 +56,13 @@ jobs:
           CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
           $Certificate = Join-Path $env:RUNNER_TEMP "benedito-signing.pfx"
-          [IO.File]::WriteAllBytes($Certificate, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
-          .\scripts\sign_windows_release.ps1 -CertificatePath $Certificate -CertificatePassword $env:CERTIFICATE_PASSWORD -Target executable
-          Remove-Item -LiteralPath $Certificate -Force
-      - name: Montar MSI com executável final
+          try {
+            [IO.File]::WriteAllBytes($Certificate, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
+            .\scripts\sign_windows_release.ps1 -CertificatePath $Certificate -CertificatePassword $env:CERTIFICATE_PASSWORD -Target executable
+          } finally {
+            Remove-Item -LiteralPath $Certificate -Force -ErrorAction SilentlyContinue
+          }
+      - name: Montar MSI
         shell: pwsh
         run: .\scripts\build_windows.ps1 -SkipTests -SkipApp
       - name: Assinar MSI
@@ -51,24 +73,51 @@ jobs:
           CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
           $Certificate = Join-Path $env:RUNNER_TEMP "benedito-signing.pfx"
-          [IO.File]::WriteAllBytes($Certificate, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
-          .\scripts\sign_windows_release.ps1 -CertificatePath $Certificate -CertificatePassword $env:CERTIFICATE_PASSWORD -Target msi
-          Remove-Item -LiteralPath $Certificate -Force
-      - name: Verificar MSI
+          try {
+            [IO.File]::WriteAllBytes($Certificate, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
+            .\scripts\sign_windows_release.ps1 -CertificatePath $Certificate -CertificatePassword $env:CERTIFICATE_PASSWORD -Target msi
+          } finally {
+            Remove-Item -LiteralPath $Certificate -Force -ErrorAction SilentlyContinue
+          }
+      - name: Verificar MSI sem assinatura obrigatória
         if: env.SIGNING_ENABLED != 'true'
         shell: pwsh
-        run: .\scripts\verify_windows_release.ps1
+        run: .\scripts\verify_windows_release.ps1 -MsiPath ".\dist\BeneditoDigital-${{ steps.version.outputs.version }}-x64.msi"
       - name: Verificar MSI assinado
         if: env.SIGNING_ENABLED == 'true'
         shell: pwsh
-        run: .\scripts\verify_windows_release.ps1 -RequireSignature
+        run: .\scripts\verify_windows_release.ps1 -MsiPath ".\dist\BeneditoDigital-${{ steps.version.outputs.version }}-x64.msi" -RequireSignature
       - name: Criar manifesto
         shell: pwsh
         run: |
-          $Version = "${{ github.ref_name }}".TrimStart('v')
-          .\venv\Scripts\python.exe .\scripts\create_release_manifest.py --msi ".\dist\BeneditoDigital-$Version-x64.msi" --version $Version --output ".\dist\release-manifest.json"
-      - uses: softprops/action-gh-release@v2
+          .\venv\Scripts\python.exe .\scripts\create_release_manifest.py --msi ".\dist\BeneditoDigital-${{ steps.version.outputs.version }}-x64.msi" --version "${{ steps.version.outputs.version }}" --output ".\dist\release-manifest.json"
+      - name: Guardar instalador validado
+        uses: actions/upload-artifact@v7
         with:
+          name: BeneditoDigital-${{ steps.version.outputs.version }}-Windows
+          path: |
+            dist/BeneditoDigital-*.msi
+            dist/release-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publicar release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Baixar instalador validado
+        uses: actions/download-artifact@v8
+        with:
+          name: BeneditoDigital-${{ needs.build.outputs.version }}-Windows
+          path: dist
+      - name: Publicar no GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
           files: |
             dist/BeneditoDigital-*.msi
             dist/release-manifest.json
