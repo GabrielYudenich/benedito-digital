@@ -503,6 +503,7 @@ class WelcomeScreen:
             reference = project.get('project_path') if project.get('external') else project['project_name']
             loaded_project = self.project_manager.load_project(reference)
             if loaded_project:
+                self._show_project_notice()
                 # Switch to editor screen
                 self.launch_editor(loaded_project, self.project_manager)
             else:
@@ -570,11 +571,21 @@ class WelcomeScreen:
                 "A pasta escolhida não contém metadata/project.json válido.",
             )
             return
+        self._show_project_notice()
         messagebox.showinfo(
             "Projeto registrado",
             "O projeto será aberto no local original, sem copiar vídeos ou frames.",
         )
         self.launch_editor(loaded_project, self.project_manager)
+
+    def _show_project_notice(self):
+        notice = self.project_manager.last_project_notice
+        if not notice:
+            return
+        if notice["kind"] == "recovered":
+            messagebox.showwarning(notice["title"], notice["message"])
+        else:
+            messagebox.showinfo(notice["title"], notice["message"])
 
     def open_settings(self):
         """Open settings dialog"""

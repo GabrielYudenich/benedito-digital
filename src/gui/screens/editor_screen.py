@@ -182,6 +182,7 @@ class EditorScreen:
         self.setup_ui()
         DarkTheme.apply_accessibility(self.root, self.accessibility_preferences)
         self.load_project_videos()
+        self.root.after(250, self._show_state_recovery_notice)
 
         # Bind cleanup
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -192,6 +193,24 @@ class EditorScreen:
         )
         if experience_level == "guided" and not self.project_manager.get_project_videos():
             self.root.after(700, self.open_workflow_assistant)
+
+    def _show_state_recovery_notice(self):
+        report = self.project_state.recovery_report
+        if report.get("recovered"):
+            messagebox.showwarning(
+                "Posição de trabalho recuperada",
+                "O Benedito restaurou a última posição, seleção e configuração salvas com segurança.",
+            )
+        elif report.get("migrations"):
+            messagebox.showinfo(
+                "Preferências atualizadas",
+                "As preferências deste projeto foram atualizadas para o formato atual.",
+            )
+        elif report.get("error"):
+            messagebox.showwarning(
+                "Estado visual protegido",
+                "A posição e as preferências não puderam ser recuperadas. O arquivo danificado foi preservado e novas gravações foram bloqueadas; o histórico de restauração não foi alterado.",
+            )
 
     def setup_theme(self):
         """Setup dark theme for the editor"""

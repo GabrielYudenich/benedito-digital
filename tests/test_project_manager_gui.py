@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import sys
 
@@ -39,6 +40,23 @@ def test_project_creation_rejects_unsafe_or_duplicate_names(tmp_path):
     assert not manager.create_project_advanced("../fora")
     assert manager.create_project_advanced("Seguro")
     assert not manager.create_project_advanced("Seguro")
+
+
+def test_loading_old_workspace_reports_friendly_migration_notice(tmp_path):
+    manager = ProjectManagerGUI()
+    manager.project_path = str(tmp_path / "projects")
+    assert manager.create_project_advanced("Acervo")
+    workspace_file = tmp_path / "projects" / "Acervo" / "metadata" / "workspace.json"
+    workspace = json.loads(workspace_file.read_text(encoding="utf-8"))
+    workspace["schema_version"] = 1
+    workspace.pop("format")
+    workspace.pop("schema_migrations")
+    workspace_file.write_text(json.dumps(workspace), encoding="utf-8")
+
+    assert manager.load_project("Acervo") is not None
+
+    assert manager.last_project_notice["kind"] == "migrated"
+    assert "preservados" in manager.last_project_notice["message"]
 
 
 def test_external_project_is_registered_without_copying_media(tmp_path):

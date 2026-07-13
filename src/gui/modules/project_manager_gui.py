@@ -20,6 +20,7 @@ class ProjectManagerGUI(BaseProjectManager):
         self.current_project: Optional[Dict] = None
         self.current_project_path: Optional[str] = None
         self.workspace = None
+        self.last_project_notice: Optional[Dict] = None
 
     @property
     def external_projects_registry(self) -> Path:
@@ -171,6 +172,7 @@ class ProjectManagerGUI(BaseProjectManager):
 
             if ProjectWorkspace is not None:
                 self.workspace = ProjectWorkspace.initialize(str(project_path))
+                self.last_project_notice = self._workspace_notice(self.workspace)
 
             self.current_project = project_data
             self.current_project_path = str(project_path)
@@ -180,6 +182,29 @@ class ProjectManagerGUI(BaseProjectManager):
         except Exception as e:
             print(f"Error loading project: {e}")
             return None
+
+    @staticmethod
+    def _workspace_notice(workspace) -> Optional[Dict]:
+        report = getattr(workspace, "recovery_report", {})
+        if report.get("recovered"):
+            return {
+                "kind": "recovered",
+                "title": "Projeto recuperado com segurança",
+                "message": (
+                    "Uma gravação interrompida foi detectada. O Benedito restaurou "
+                    "a última cópia íntegra e preservou o arquivo danificado para diagnóstico."
+                ),
+            }
+        if report.get("migrations"):
+            return {
+                "kind": "migrated",
+                "title": "Projeto atualizado",
+                "message": (
+                    "O formato deste projeto foi atualizado automaticamente. "
+                    "O histórico, os frames e o material original foram preservados."
+                ),
+            }
+        return None
 
     def get_current_project(self) -> Optional[Dict]:
         """Get currently loaded project"""
