@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "version": "1.1.0",
+  "release_url": "https://github.com/GabrielYudenich/benedito-digital/releases/tag/v1.1.0",
+  "msi_url": "https://github.com/GabrielYudenich/benedito-digital/releases/download/v1.1.0/BeneditoDigital-1.1.0-x64.msi",
+  "msi_sha256": "eae839f4fb77cecc43ad436cac04369b2a1f596df961740b21e0e10c15da2c8f",
+  "notes": "Película, colaboração incremental, timeline multipista, scopes, acessibilidade e atualização segura."
+}
