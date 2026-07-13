@@ -27,6 +27,26 @@ def tracked_files(repository: Path) -> list[str]:
     return [item.decode("utf-8") for item in result.stdout.split(b"\0") if item]
 
 
+def ignored_python_sources(repository: Path) -> list[str]:
+    result = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+            "--",
+            "src",
+        ],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+    )
+    paths = [item.decode("utf-8") for item in result.stdout.split(b"\0") if item]
+    return [path for path in paths if path.endswith(".py") and "__pycache__" not in path]
+
+
 def audit_repository(repository: Path, maximum_bytes: int) -> list[str]:
     problems = []
     for relative_path in tracked_files(repository):
@@ -38,6 +58,8 @@ def audit_repository(repository: Path, maximum_bytes: int) -> list[str]:
         if path.is_file() and path.stat().st_size > maximum_bytes:
             size_mib = path.stat().st_size / (1024 * 1024)
             problems.append(f"arquivo rastreado com {size_mib:.1f} MiB: {normalized}")
+    for relative_path in ignored_python_sources(repository):
+        problems.append(f"fonte Python do runtime ignorado: {relative_path}")
     return problems
 
 
