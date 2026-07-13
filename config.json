@@ -1,0 +1,12 @@
+{
+    "software": "Benedito Digital",
+    "version": "1.1.0",
+    "author": "gabrielyudenich@gmail.com",
+    "language": "pt-br",
+    "license": "Apache-2.0",
+    "description": "Software brasileiro de restauração de mídias - Seu Benedito dá um jeito!",
+    "updates": {
+        "manifest_url": "https://raw.githubusercontent.com/GabrielYudenich/benedito-digital/main/release-manifest.json",
+        "releases_url": "https://github.com/GabrielYudenich/benedito-digital/releases"
+    }
+}
