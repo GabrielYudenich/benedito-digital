@@ -78,6 +78,11 @@ pip install -r requirements.txt
 python run_gui.py
 ```
 
+Ao executar pelo código-fonte, cada sessão gera automaticamente um log técnico detalhado em
+`.benedito/logs/`. Ele inclui horários, threads, chamadas relevantes, jobs, FFmpeg/FFprobe e
+stack traces completos. O executável instalado pelo MSI não cria esses logs. Consulte o
+[guia de diagnóstico](docs/diagnostics.md).
+
 Colaboração pela linha de comando:
 
 ```powershell

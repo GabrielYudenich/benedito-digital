@@ -14,6 +14,8 @@ e modelos locais. O objetivo é preservar responsividade sem carregar filmes int
 - `src/gui/screens`: composição das telas principais;
 - `models`: registro, adaptadores mínimos, pesos redistribuíveis e avisos de terceiros.
 
+`src/core/diagnostics.py` configura observabilidade somente para execuções de desenvolvimento pelo código-fonte. O launcher instala os hooks antes de criar a janela; jobs e processos de mídia usam o módulo `logging` sem conhecer o destino. Em builds congelados não existe handler de arquivo.
+
 ## Invariantes
 
 1. O original importado é imutável e identificado por SHA-256.
