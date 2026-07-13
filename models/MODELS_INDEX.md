@@ -26,4 +26,10 @@ Os dois pesos U-Net Dust de licença MIT são incluídos para oferecer detecçã
 
 Outros pesos são escolhidos pelo usuário e copiados transacionalmente para models/weights/<família> com SHA-256 registrado. Eles não são incluídos no instalador oficial.
 
+Em uma instalação do Windows, pesos opcionais são armazenados em `%LOCALAPPDATA%\Benedito Digital\Models`, e não em `Program Files` nem dentro do MSI. O caminho pode ser alterado com `BENEDITO_MODELS_DIR`.
+
+## Integrações opcionais planejadas
+
+- **LTX-2.3**: retake, interpolação e vídeo para vídeo em modo generativo experimental. Não acompanha o MSI, exige um worker CUDA separado e permanece desabilitado até a conclusão do adaptador. Consulte `docs/ltx2-integration.md`.
+
 Arquivos com licença review-upstream não devem ser redistribuídos até a confirmação dos termos na fonte original.

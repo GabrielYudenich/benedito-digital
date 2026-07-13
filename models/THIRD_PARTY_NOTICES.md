@@ -18,6 +18,10 @@ Os pesos U-Net incluídos possuem origem, tamanho e SHA-256 em models/weights/un
 
 Pesos podem ter termos diferentes do código da arquitetura. O catálogo visual mostra review-upstream quando a licença ainda precisa ser confirmada. Um peso com licença desconhecida não deve ser redistribuído com o programa.
 
+## LTX-2
+
+O LTX-2.3 da Lightricks aparece somente como integração opcional planejada e não é distribuído no MSI atual. Seu código, pesos e derivados usam o LTX-2 Community License Agreement, com termos e restrições diferentes da licença Apache 2.0 do Benedito. Fonte: <https://github.com/Lightricks/LTX-2>.
+
 ## Estrutura compacta
 
     models/

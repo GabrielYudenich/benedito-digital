@@ -10,6 +10,8 @@ O Benedito Digital usa PyInstaller em modo `onedir` e gera um MSI por usuário. 
 - internet no primeiro preparo do FFmpeg;
 - espaço livre para aproximadamente 3 GB entre downloads, build, distribuição e arquivos temporários.
 
+O MSI inclui apenas os pequenos pesos U-Net Dust já autorizados para redistribuição. Modelos opcionais grandes ou sujeitos a aceite de termos não são baixados durante a instalação; ficam no diretório do usuário e usam um fluxo posterior com consentimento e progresso.
+
 O gerador MSI nativo usa `msilib`, removido do Python 3.13. O modo alternativo `-MsiEngine wix` permanece disponível para uma migração futura ao WiX.
 
 ## Build completo

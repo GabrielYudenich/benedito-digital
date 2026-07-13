@@ -113,6 +113,10 @@ Os dois pesos U-Net Dust distribuídos sob MIT acompanham a aplicação para det
 pesos opcionais de SwinIR e Restormer são importados pelo usuário com SHA-256 registrado.
 Consulte [os avisos de terceiros](models/THIRD_PARTY_NOTICES.md) para créditos e licenças.
 
+Modelos gigantes ou com aceite de licença, como o LTX-2.3, não acompanham o MSI. Eles ficam
+no catálogo como integrações opcionais pós-instalação e são armazenados no perfil local do
+usuário. Consulte [a avaliação e o plano seguro do LTX-2](docs/ltx2-integration.md).
+
 ## Licença
 
 O código do Benedito Digital é distribuído sob a licença Apache 2.0. Modelos, pesos e
