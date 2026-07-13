@@ -16,14 +16,18 @@ class ImportModeDialog:
         self.confirm_callback = confirm_callback
         self.window = tk.Toplevel(parent)
         self.window.title("Escolher forma de importação")
-        self.window.geometry("620x430")
-        self.window.minsize(540, 390)
+        self.window.geometry("640x540")
+        self.window.minsize(560, 500)
         self.window.transient(parent)
         self.window.grab_set()
         self.window.configure(bg="#17131f")
         self.window.protocol("WM_DELETE_WINDOW", self._cancel)
         self.window.bind("<Escape>", lambda _event: self._cancel())
         self.window.bind("<Return>", lambda _event: self._confirm())
+        self.window.bind("1", lambda _event: self._select_mode("full"))
+        self.window.bind("2", lambda _event: self._select_mode("segment"))
+        self.window.bind("<Up>", lambda _event: self._select_mode("full"))
+        self.window.bind("<Down>", lambda _event: self._select_mode("segment"))
         self.window.columnconfigure(0, weight=1)
         self.window.rowconfigure(0, weight=1)
 
@@ -77,28 +81,53 @@ class ImportModeDialog:
         options.pack(fill=tk.X, pady=(15, 0))
         radio_options = {
             "variable": self.mode_var,
+            "command": self._refresh_selection,
             "font": ("Segoe UI", 10),
             "fg": "#f5f3f7",
-            "bg": "#17131f",
-            "selectcolor": "#352a45",
-            "activebackground": "#17131f",
+            "bg": "#241c31",
+            "selectcolor": "#6d28d9",
+            "activebackground": "#4c1d95",
             "activeforeground": "#f5f3f7",
             "anchor": tk.W,
             "justify": tk.LEFT,
+            "indicatoron": False,
+            "relief": tk.RAISED,
+            "borderwidth": 2,
+            "highlightthickness": 2,
+            "highlightbackground": "#4b3f59",
+            "highlightcolor": "#c084fc",
+            "padx": 14,
+            "pady": 10,
+            "cursor": "hand2",
+            "takefocus": True,
         }
         self.full_radio = tk.Radiobutton(
             options,
-            text="Filme inteiro — copiar todo o arquivo para o projeto",
+            text="FILME INTEIRO\nCopiar todo o arquivo para o projeto",
             value="full",
             **radio_options,
         )
-        self.full_radio.pack(fill=tk.X, pady=4)
-        tk.Radiobutton(
+        self.full_radio.pack(fill=tk.X, pady=(4, 6))
+        self.segment_radio = tk.Radiobutton(
             options,
-            text="Somente um trecho — escolher início e final após a análise",
+            text="SOMENTE UM TRECHO\nEscolher início e final após a análise",
             value="segment",
             **radio_options,
-        ).pack(fill=tk.X, pady=4)
+        )
+        self.segment_radio.pack(fill=tk.X, pady=(0, 4))
+
+        selection_panel = tk.Frame(content, bg="#17283a", padx=14, pady=10)
+        selection_panel.pack(fill=tk.X, pady=(10, 0))
+        self.selection_status_var = tk.StringVar()
+        tk.Label(
+            selection_panel,
+            textvariable=self.selection_status_var,
+            font=("Segoe UI", 10, "bold"),
+            fg="#93c5fd",
+            bg="#17283a",
+            wraplength=540,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W)
 
         footer = tk.Frame(self.window, bg="#201829", padx=26, pady=14)
         footer.grid(row=1, column=0, sticky="ew")
@@ -112,9 +141,8 @@ class ImportModeDialog:
             padx=18,
             pady=9,
         ).pack(side=tk.RIGHT)
-        tk.Button(
+        self.confirm_button = tk.Button(
             footer,
-            text="OK — analisar mídia",
             command=self._confirm,
             bg="#a855f7",
             fg="white",
@@ -122,11 +150,52 @@ class ImportModeDialog:
             padx=18,
             pady=9,
             font=("Segoe UI", 10, "bold"),
-        ).pack(side=tk.RIGHT, padx=(0, 8))
+        )
+        self.confirm_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self._refresh_selection()
         self.full_radio.focus_set()
 
     def _cancel(self):
         self.window.destroy()
+
+    def _select_mode(self, mode):
+        self.mode_var.set(mode)
+        self._refresh_selection()
+        target = self.segment_radio if mode == "segment" else self.full_radio
+        target.focus_set()
+
+    def _refresh_selection(self):
+        segment = self.mode_var.get() == "segment"
+        self.full_radio.config(
+            text=(
+                "✓ FILME INTEIRO SELECIONADO\nCopiar todo o arquivo para o projeto"
+                if not segment
+                else "FILME INTEIRO\nCopiar todo o arquivo para o projeto"
+            ),
+            relief=tk.SUNKEN if not segment else tk.RAISED,
+            bg="#6d28d9" if not segment else "#241c31",
+        )
+        self.segment_radio.config(
+            text=(
+                "✓ SOMENTE UM TRECHO SELECIONADO\nEscolher início e final após a análise"
+                if segment
+                else "SOMENTE UM TRECHO\nEscolher início e final após a análise"
+            ),
+            relief=tk.SUNKEN if segment else tk.RAISED,
+            bg="#6d28d9" if segment else "#241c31",
+        )
+        if segment:
+            self.selection_status_var.set(
+                "Selecionado: SOMENTE UM TRECHO. Pressione OK; depois da análise, "
+                "você informará o início e o final."
+            )
+            self.confirm_button.config(text="OK — analisar e escolher trecho")
+        else:
+            self.selection_status_var.set(
+                "Selecionado: FILME INTEIRO. Pressione OK para analisar e revisar "
+                "a importação completa."
+            )
+            self.confirm_button.config(text="OK — analisar filme inteiro")
 
     def _confirm(self):
         mode = self.mode_var.get()

@@ -10,6 +10,7 @@ if str(SRC_DIR) not in sys.path:
 
 from gui.screens import editor_screen
 from gui.screens.editor_screen import EditorScreen
+from gui.dialogs.import_video_dialog import ImportModeDialog
 
 
 class FakeButton:
@@ -18,6 +19,17 @@ class FakeButton:
 
     def config(self, **options):
         self.states.append(options)
+
+
+class FakeVariable:
+    def __init__(self, value=""):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
 
 
 class FakeJobContext:
@@ -106,3 +118,21 @@ def test_confirmed_mode_is_analyzed_then_forwarded_to_review(monkeypatch, tmp_pa
     assert reviews[0][1] == str(source)
     assert reviews[0][4] == "segment"
     assert reviews[0][2]["duration"] == 42.0
+
+
+def test_segment_selection_has_explicit_visual_confirmation():
+    dialog = object.__new__(ImportModeDialog)
+    dialog.mode_var = FakeVariable("segment")
+    dialog.selection_status_var = FakeVariable()
+    dialog.full_radio = FakeButton()
+    dialog.segment_radio = FakeButton()
+    dialog.confirm_button = FakeButton()
+
+    dialog._refresh_selection()
+
+    assert "SELECIONADO" in dialog.segment_radio.states[-1]["text"]
+    assert "✓" in dialog.segment_radio.states[-1]["text"]
+    assert "SOMENTE UM TRECHO" in dialog.selection_status_var.get()
+    assert dialog.confirm_button.states[-1]["text"] == (
+        "OK — analisar e escolher trecho"
+    )
