@@ -31,6 +31,22 @@ class WeightRecord:
     sha256: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class OptionalModelPackage:
+    id: str
+    name: str
+    provider: str
+    tasks: tuple[str, ...]
+    status: str
+    install_policy: str
+    license: str
+    source: str
+    weights_source: str
+    minimum_download: str
+    requirements: str
+    notes: str
+
+
 class ModelRegistry:
     """Discovers weights without importing entire external repositories."""
 
@@ -43,7 +59,28 @@ class ModelRegistry:
         if data.get("schema_version") != 1 or not isinstance(data.get("families"), dict):
             raise ValueError("Unsupported model registry")
         self.families = data["families"]
+        self.packages = tuple(
+            OptionalModelPackage(
+                id=package["id"],
+                name=package["name"],
+                provider=package["provider"],
+                tasks=tuple(package.get("tasks", ())),
+                status=package["status"],
+                install_policy=package["install_policy"],
+                license=package["license"],
+                source=package["source"],
+                weights_source=package["weights_source"],
+                minimum_download=package["minimum_download"],
+                requirements=package["requirements"],
+                notes=package["notes"],
+            )
+            for package in data.get("optional_packages", ())
+        )
         self.weight_roots = [Path(root).resolve() for root in weight_roots]
+
+    def optional_catalog(self) -> tuple[OptionalModelPackage, ...]:
+        """Return large or gated integrations that are never silently installed."""
+        return self.packages
 
     def discover(self) -> List[WeightRecord]:
         records = []

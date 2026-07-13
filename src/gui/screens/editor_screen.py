@@ -29,7 +29,7 @@ from core.chunks import ChunkedFrameRunner
 from core.damage_analysis import FrameDamageAnalyzer
 from core.jobs import JobManager, JobState
 from core.model_registry import ModelRegistry
-from core.paths import resource_root
+from core.paths import default_models_dir, resource_root
 from core.selections import polygon_mask, rectangle_mask, selection_bounds
 from core.storage import estimate_lossless_frames_bytes, require_free_space
 from core.accessibility import AccessibilityPreferences
@@ -43,7 +43,7 @@ from gui.controllers.project_version_controller import ProjectVersionController
 from gui.dialogs.accessibility_dialog import AccessibilityDialog
 from gui.dialogs.damage_analysis_dialog import DamageAnalysisDialog
 from gui.dialogs.extraction_dialog import ExtractionDialog
-from gui.dialogs.import_video_dialog import ImportVideoDialog
+from gui.dialogs.import_video_dialog import ImportModeDialog, ImportVideoDialog
 from gui.dialogs.export_dialog import ExportDialog
 from gui.dialogs.ffmpeg_config import FFmpegConfigDialog
 from gui.dialogs.model_registry_dialog import ModelRegistryDialog
@@ -112,12 +112,15 @@ class EditorScreen:
         models_roots = []
         candidate_src = os.path.join(repo_root, "src", "models")
         candidate_root = os.path.join(repo_root, "models")
-        self.native_weights_root = os.path.join(candidate_root, "weights")
+        bundled_weights_root = os.path.join(candidate_root, "weights")
+        self.native_weights_root = str(default_models_dir())
         os.makedirs(self.native_weights_root, exist_ok=True)
         if os.path.isdir(candidate_src):
             models_roots.append(candidate_src)
         if self.native_weights_root not in models_roots:
             models_roots.append(self.native_weights_root)
+        if os.path.isdir(bundled_weights_root):
+            models_roots.append(bundled_weights_root)
         if os.path.isdir(candidate_root) and candidate_root not in models_roots:
             models_roots.append(candidate_root)
         self.model_roots = models_roots or [candidate_root]
@@ -2545,11 +2548,22 @@ class EditorScreen:
     def import_video(self):
         file_path = filedialog.askopenfilename(
             title="Selecione um vídeo",
-            filetypes=[("Arquivos de vídeo", "*.mp4 *.avi *.mov *.mkv *.wmv *.flv"), ("Todos os arquivos", "*.*")]
+            filetypes=[
+                ("Arquivos de vídeo", "*.mp4 *.avi *.mov *.mkv *.wmv *.flv"),
+                ("Todos os arquivos", "*.*"),
+            ],
         )
 
         if not file_path:
             return
+
+        ImportModeDialog(
+            self.root,
+            file_path,
+            lambda mode: self._analyze_video_for_import(file_path, mode),
+        )
+
+    def _analyze_video_for_import(self, file_path, mode):
         self.import_btn.config(state=tk.DISABLED)
 
         def analyze_task(context):
@@ -2566,6 +2580,7 @@ class EditorScreen:
                 file_path,
                 video_info,
                 self.project_manager.get_originals_dir(),
+                mode,
                 self._start_video_import,
             )
 

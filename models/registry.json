@@ -36,5 +36,21 @@
       "source": "https://github.com/cszn/BSRGAN",
       "attribution": "Kai Zhang and BSRGAN contributors"
     }
-  }
+  },
+  "optional_packages": [
+    {
+      "id": "ltx-2.3",
+      "name": "LTX-2.3",
+      "provider": "Lightricks",
+      "tasks": ["retake", "keyframe_interpolation", "video_to_video"],
+      "status": "experimental-planned",
+      "install_policy": "optional-after-install",
+      "license": "LTX-2 Community License Agreement",
+      "source": "https://github.com/Lightricks/LTX-2",
+      "weights_source": "https://huggingface.co/Lightricks/LTX-2.3",
+      "minimum_download": "47,1 GB mais o codificador Gemma 3",
+      "requirements": "Python 3.12+, CUDA > 12.7 e PyTorch ~= 2.7",
+      "notes": "Uso generativo experimental. Não substitui restauração arquivística fiel e nunca altera o original."
+    }
+  ]
 }

@@ -49,3 +49,17 @@ def default_projects_dir() -> Path:
         documents = Path(os.environ.get("USERPROFILE", Path.home())) / "Documents"
         return documents / "Benedito Digital" / "Projetos"
     return resource_root() / "projects"
+
+
+def default_models_dir() -> Path:
+    """Return a writable per-user directory for optional model weights."""
+    configured = os.environ.get("BENEDITO_MODELS_DIR")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    if os.name == "nt":
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    else:
+        base = Path(
+            os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
+        )
+    return base / "Benedito Digital" / "Models"

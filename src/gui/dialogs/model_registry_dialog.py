@@ -11,15 +11,47 @@ class ModelRegistryDialog:
         self.registry = registry
         self.add_callback = add_callback
         self.records = []
+        self.optional_packages = list(self.registry.optional_catalog())
         self.window = tk.Toplevel(parent)
         self.window.title("Modelos e créditos")
-        self.window.geometry("940x560")
-        self.window.minsize(760, 460)
+        self.window.geometry("940x650")
+        self.window.minsize(760, 560)
         self.window.transient(parent)
         self.window.configure(bg="#17131f")
 
         tk.Label(self.window, text="Modelos instalados", font=("Segoe UI", 21, "bold"), fg="#f5f3f7", bg="#17131f").pack(anchor=tk.W, padx=22, pady=(20, 4))
         tk.Label(self.window, text="Pesos ficam locais. Licença, origem e autoria permanecem visíveis para cada família.", font=("Segoe UI", 10), fg="#b8afc4", bg="#17131f").pack(anchor=tk.W, padx=22, pady=(0, 14))
+
+        if self.optional_packages:
+            package = self.optional_packages[0]
+            catalog = tk.Frame(self.window, bg="#17283a", padx=14, pady=11)
+            catalog.pack(fill=tk.X, padx=22, pady=(0, 12))
+            tk.Label(
+                catalog,
+                text=f"Opcional futuro: {package.name} ({package.provider})",
+                font=("Segoe UI", 11, "bold"),
+                fg="#93c5fd",
+                bg="#17283a",
+            ).pack(side=tk.LEFT)
+            tk.Label(
+                catalog,
+                text=(
+                    f"  •  {package.minimum_download}  •  não acompanha o MSI"
+                ),
+                font=("Segoe UI", 9),
+                fg="#f5f3f7",
+                bg="#17283a",
+            ).pack(side=tk.LEFT)
+            tk.Button(
+                catalog,
+                text="Ver requisitos oficiais",
+                command=lambda: webbrowser.open(package.source),
+                bg="#3b82f6",
+                fg="white",
+                relief=tk.FLAT,
+                padx=10,
+                pady=5,
+            ).pack(side=tk.RIGHT)
 
         frame = tk.Frame(self.window, bg="#17131f")
         frame.pack(fill=tk.BOTH, expand=True, padx=22)

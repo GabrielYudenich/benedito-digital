@@ -15,8 +15,8 @@ from .film_analysis import (
 from .edit_timeline import EditTimeline, TimelineClip, TimelineTrack, TimelineTransition
 from .keyframes import Keyframe, KeyframeCurve
 from .updates import UpdateChecker, UpdateCheckError, UpdateInfo
-from .model_registry import ModelRegistry, WeightRecord
-from .paths import default_projects_dir, resource_path, resource_root
+from .model_registry import ModelRegistry, OptionalModelPackage, WeightRecord
+from .paths import default_models_dir, default_projects_dir, resource_path, resource_root
 from .selections import polygon_mask, rectangle_mask, selection_bounds
 
 __all__ = [
@@ -51,7 +51,9 @@ __all__ = [
     "JobSnapshot",
     "JobState",
     "ModelRegistry",
+    "OptionalModelPackage",
     "WeightRecord",
+    "default_models_dir",
     "default_projects_dir",
     "resource_path",
     "resource_root",
