@@ -25,6 +25,11 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - player de referência com áudio opcional por FFplay.
 - formatos de trecho selecionáveis: MKV/FFV1, MOV/ProRes 422 HQ e MP4/H.264;
 - análise de canais e centralização opcional de áudio presente somente em um lado.
+- dropdowns escuros com contraste consistente no campo e na lista de opções;
+- filmstrip não bloqueante com 11 miniaturas próximas e cache gerado em segundo plano;
+- zoom ancorado no cursor, pan com botão direito e render somente do viewport visível;
+- painel inferior recolhível e visualização duplicada para um segundo monitor;
+- ícones nas ferramentas de seleção, pintura, borracha, clone e healing.
 
 ### Alterado
 

@@ -31,6 +31,14 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 4. Acompanhe porcentagem, etapa e tempo restante na Central de Progresso.
 5. Ao concluir, expanda as páginas de 100 frames na árvore para abrir um quadro específico.
 
+**4. Navegar e inspecionar frames**
+1. Use `Ctrl + roda do mouse` para ampliar a região sob o cursor.
+2. Segure o botão direito e arraste para mover o frame ampliado.
+3. Use `Ajustar` para voltar à imagem inteira.
+4. Use `Ocultar painel inferior` para maximizar a área de restauração.
+5. Use `Segunda tela` para duplicar o frame em uma janela independente, movê-la para
+   outro monitor e alternar tela cheia com `F11`.
+
 **4. Navegar e editar frames**
 1. Vá para a aba `Frames`.
 2. Use as setas do teclado para navegar.

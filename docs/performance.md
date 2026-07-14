@@ -53,3 +53,14 @@ Para o primeiro ensaio com um `.mov` de 30 GB:
 
 Importação, hashing, FFmpeg e extração trabalham em streaming. O arquivo de 30 GB não é
 carregado inteiro na memória. A velocidade ainda depende do codec, do disco e da resolução.
+
+## Navegação dos frames
+
+A faixa inferior mantém somente 11 miniaturas próximas ao frame atual. Miniaturas ausentes
+são geradas por um único worker em segundo plano e substituem os placeholders sem bloquear
+o Tkinter. Arrastar rapidamente o slider também agrupa eventos antes de carregar o frame.
+
+O zoom renderiza apenas o viewport visível, em vez de criar uma imagem ampliada gigante na
+memória. `Ctrl + roda` ancora o zoom no cursor e botão direito + arrasto move a imagem. O
+painel inferior pode ser recolhido, e `Segunda tela` abre uma visualização independente para
+monitores adicionais.
