@@ -39,6 +39,13 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - catálogo lateral paginado em lista ou miniaturas, com busca por número e filtro de estado;
 - avisos coloridos no catálogo e na visão geral para cada estado de revisão do frame;
 - painel destacável de revisão com observação, navegação e atalho `Shift+S`.
+- avisos sincronizados também na árvore de mídia já expandida;
+- corte útil não destrutivo, com filtro de frames fora do corte e originais preservados;
+- menu de restauração com acesso direto a placa limpa, estabilização e pré-render;
+- pré-renderização por posicionamento estabilizado;
+- propriedades avançadas em janela independente e atalhos configuráveis por usuário;
+- segunda tela com modos original, resultado e comparação, divisor, playback e contadores;
+- opção de incorporar frame e timecodes no render final.
 
 ### Alterado
 

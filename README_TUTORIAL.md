@@ -38,11 +38,14 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 3. Use `Ajustar` para voltar à imagem inteira.
 4. As miniaturas ficam no painel lateral. Alterne para `Lista` quando quiser reservar
    mais espaço ou localizar frames apenas pelo número e estado.
-5. Use `Segunda tela` para duplicar o frame em uma janela independente, movê-la para
-   outro monitor e alternar tela cheia com `F11`.
-6. A barra `Navegar por todos os frames` muda o frame atual. O catálogo lateral acompanha
+5. Use `Segunda tela` para abrir uma janela independente em outro monitor. Escolha
+   `Original`, `Resultado` ou `Comparar`; no último modo, mova o divisor para inspecionar
+   as duas versões no mesmo frame. `F11` alterna a tela cheia.
+6. A segunda tela possui frame anterior/seguinte, reprodução, velocidade e áudio em `1x`,
+   além dos contadores de frame interno, tempo do projeto, tempo da fonte e tempo do trecho.
+7. A barra `Navegar por todos os frames` muda o frame atual. O catálogo lateral acompanha
    o frame e troca de página automaticamente quando necessário.
-7. Em `Revisão sem áudio`, escolha de `0.25x` a `4x`. Use `◀` para revisar voltando,
+8. Em `Revisão sem áudio`, escolha de `0.25x` a `4x`. Use `◀` para revisar voltando,
    `■` para pausar e `▶` para avançar pelo trecho de trabalho.
 
 **5. Navegar e editar frames**
@@ -60,6 +63,9 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
     Poeira, Risco, Mancha, Perfuração, Revisar ou Aprovado com uma observação opcional.
 11. O aviso aparece discretamente na visão geral e com sua própria cor no catálogo lateral.
     Use o filtro de estado para revisar somente um tipo de problema.
+12. Para retirar frames que não entrarão no trabalho, navegue até o novo início e use
+    `Editar > Corte não destrutivo > Definir frame atual como início útil`. Faça o mesmo
+    com o final. Os PNGs e o vídeo original permanecem no projeto e o corte pode ser desfeito.
 
 **6. Separar posicionamentos e construir uma placa limpa**
 1. Digite o primeiro e o último frame em `Trecho de trabalho` — por exemplo, `61` e
@@ -71,19 +77,24 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
    restauração e placa limpa passam a usar esse trecho.
 4. No gerenciador, use `Estabilizar posicionamento` para aplicar estabilização automática
    somente ao intervalo selecionado.
-5. Para limitar a placa a uma parte do cenário, escolha `Retângulo` ou `Laço` no frame
+5. Ao concluir, escolha `Pré-renderizar` no mesmo gerenciador para gerar e abrir um MP4
+   curto do posicionamento estabilizado antes do render final.
+6. Para limitar a placa a uma parte do cenário, escolha `Retângulo` ou `Laço` no frame
    representativo, marque o fundo e depois use `Criar placa limpa`.
-6. Ative `Usar a seleção atual como recorte em todo o trecho`. O mesmo recorte será
+7. Abra `Restauração > Criar placa limpa do trecho` — a função também continua disponível
+   no botão `Placa limpa` e no gerenciador de posicionamentos.
+8. Ative `Usar a seleção atual como recorte em todo o trecho`. O mesmo recorte será
    reutilizado nos frames do segmento, sem depender de uma seleção separada em cada frame.
-7. O Benedito alinha amostras, calcula um fundo mediano e mede se a câmera realmente
+9. O Benedito alinha amostras, calcula um fundo mediano e mede se a câmera realmente
    permaneceu estática antes de alterar qualquer frame.
-8. A aplicação usa somente sujeiras pequenas no fundo estável. Rostos, braços e outros
+10. A aplicação usa somente sujeiras pequenas no fundo estável. Rostos, braços e outros
    movimentos grandes são protegidos e permanecem no frame original.
-9. Se a câmera se mover além do limite seguro, a placa é preservada para inspeção, mas
+11. Se a câmera se mover além do limite seguro, a placa é preservada para inspeção, mas
    não é aplicada automaticamente. Estabilize ou reduza o segmento e tente novamente.
 
 **7. Restaurar**
-1. Ajuste o `Preset Global` e o `Perfil`.
+1. Abra `Propriedades > Abrir propriedades avançadas` para ajustar o `Preset Global` e
+   o `Perfil` sem reduzir a área principal do frame.
 2. Selecione o modelo em `Modelo ML` (DnCNN, SwinIR, Restormer).
 3. Clique em `Restaurar frame atual` ou `Restaurar intervalo`.
 
@@ -94,8 +105,10 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 4. Use `Ver upscale` para comparar.
 
 **9. Preview e render**
-1. Clique em `Preview` para gerar um trecho.
-2. Clique em `Renderizar vídeo restaurado` para exportar.
+1. Use `Restauração > Pré-renderizar trecho ativo` para gerar um MP4 do intervalo útil.
+2. Use `Restauração > Renderizar resultado final` para exportar.
+3. Na segunda tela, ative `Gravar contadores no render` somente quando desejar incorporar
+   frame e timecodes visivelmente no arquivo final.
 
 **10. Gerenciar modelos**
 1. Na tela inicial, abra `Configurações`.
@@ -131,6 +144,10 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 8. `Ctrl + Shift + C` abre a colaboração.
 9. `Ctrl + Shift + S` abre os scopes.
 10. `Shift + S` abre o painel de revisão e estado do frame.
+11. `Ctrl + Alt + P` abre a placa limpa e `Ctrl + Alt + S` estabiliza o trecho.
+12. `F8` abre a segunda tela.
+13. Abra `Propriedades > Configurar atalhos` para trocar ou remover qualquer atalho listado;
+    as escolhas são pessoais e valem para todos os projetos desse usuário.
 
 **Dicas**
 1. Use `Cinema` como preset padrão para equilíbrio.

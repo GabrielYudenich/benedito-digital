@@ -40,6 +40,9 @@ A branch `develop` concentra a validação da próxima versão. A fundação atu
 - visão geral dos segmentos e reprodução silenciosa dos frames entre `0.25x` e `4x`;
 - catálogo lateral paginado em lista ou miniaturas, com busca por número e filtro de estado;
 - avisos coloridos por frame e painel destacável de revisão acessível por `Shift+S`;
+- corte útil não destrutivo para retirar cabeças e caudas do preview e do render sem apagar PNGs;
+- janela separada de propriedades avançadas e atalhos configuráveis por usuário;
+- segunda tela com original, resultado, comparação por divisor, playback e contadores;
 - armazenamento deduplicado de artefatos por conteúdo;
 - restauração e filtros por intervalo com progresso real;
 - detecção e alinhamento de película pelas perfurações laterais;
@@ -70,6 +73,8 @@ Guias: [película](docs/film-restoration.md), [colaboração](docs/collaboration
 - preparação visual da extração com FPS, quantidade de frames, espaço estimado e espaço livre;
 - árvore de mídia por fonte e catálogo de frames em lista ou miniaturas paginadas;
 - player de referência com proxy, reprodução contínua e áudio opcional;
+- menu `Restauração` para posicionamentos, placa limpa, estabilização, pré-render e render final;
+- menu `Propriedades` para manter opções avançadas fora da área principal de restauração;
 - gerenciador visual de branches e histórico por frame;
 - escala de leitura de 90% a 150%.
 

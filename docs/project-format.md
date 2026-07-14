@@ -80,6 +80,10 @@ Posicionamentos de camera ficam em `metadata/camera_segments.json`, separados
 por fonte. Eles guardam nome, primeiro frame, ultimo frame e confianca da sugestao. O arquivo
 e pequeno e pode ser compartilhado sem copiar a sequencia de imagens.
 
+O corte útil não destrutivo fica em `metadata/frame_cuts.json`, também separado por fonte.
+Ele registra apenas primeiro e último frame incluídos no preview e no render. Nenhum PNG é
+apagado, e `frame_cut.update` ou `frame_cut.reset` preservam a decisão no histórico da branch.
+
 Placas limpas ficam no worktree da branch em `clean_plates/<id>/`. Cada placa possui o fundo
 mediano e a mascara das regioes estaveis. As operacoes `clean_plate.build` e
 `clean_plate.apply` registram intervalo, diagnosticos, protecao de foreground e hashes dos

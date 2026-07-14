@@ -64,7 +64,13 @@ antes de carregar o frame.
 O zoom renderiza apenas o viewport visível, em vez de criar uma imagem ampliada gigante na
 memória. `Ctrl + roda` ancora o zoom no cursor e botão direito + arrasto move a imagem. O
 catálogo lateral pode alternar para lista, e `Segunda tela` abre uma visualização independente
-para monitores adicionais.
+para monitores adicionais. Essa janela escolhe original, resultado ou comparação por divisor
+sem duplicar os PNGs. A reprodução reutiliza o cache atual; áudio fica limitado a `1x` para
+manter sincronismo e os contadores são calculados a partir do FPS e da proveniência do trecho.
+
+O corte útil em `Editar > Corte não destrutivo` apenas grava os limites utilizados por preview
+e render. Frames fora do corte ficam cinza no catálogo, mas não são removidos do disco. Assim,
+é possível retirar frames 1–60 de um trabalho sem reconstruir a sequência e restaurá-los depois.
 
 ## Posicionamentos e placa limpa
 
