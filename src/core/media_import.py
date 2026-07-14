@@ -9,6 +9,26 @@ from pathlib import Path
 from .storage import estimate_lossless_video_bytes
 
 
+WORKING_FORMATS = {
+    "mkv_lossless": {
+        "extension": ".mkv",
+        "video_codec": "ffv1",
+        "audio_codec": "pcm_s24le",
+    },
+    "mov_prores": {
+        "extension": ".mov",
+        "video_codec": "prores_ks",
+        "audio_codec": "pcm_s24le",
+    },
+    "mp4_hq": {
+        "extension": ".mp4",
+        "video_codec": "h264",
+        "audio_codec": "aac",
+    },
+}
+AUDIO_MODES = {"preserve", "dual_mono_left", "dual_mono_right", "mono_mix"}
+
+
 class MediaImportPlanError(ValueError):
     """Raised when an import selection is incomplete or unsafe."""
 
@@ -32,6 +52,8 @@ class MediaImportPlan:
     start_time: float = 0.0
     end_time: float | None = None
     estimated_bytes: int = 0
+    working_format: str = "mkv_lossless"
+    audio_mode: str = "preserve"
 
     @property
     def is_segment(self) -> bool:
@@ -67,6 +89,8 @@ def build_import_plan(
     *,
     start_value: str = "0",
     end_value: str = "",
+    working_format: str = "mkv_lossless",
+    audio_mode: str = "preserve",
 ) -> MediaImportPlan:
     source = Path(source_path).expanduser().resolve()
     if not source.is_file():
@@ -80,6 +104,10 @@ def build_import_plan(
         )
     if mode != "segment":
         raise MediaImportPlanError("Escolha filme inteiro ou somente um trecho")
+    if working_format not in WORKING_FORMATS:
+        raise MediaImportPlanError("Escolha um formato de trabalho válido")
+    if audio_mode not in AUDIO_MODES:
+        raise MediaImportPlanError("Escolha um tratamento de áudio válido")
 
     total_duration = float(video_info.get("duration", 0) or 0)
     if total_duration <= 0:
@@ -91,7 +119,7 @@ def build_import_plan(
     if end > total_duration + 0.05:
         raise MediaImportPlanError("O final do trecho ultrapassa a duração do vídeo")
 
-    destination_name = segment_file_name(source, start, end)
+    destination_name = segment_file_name(source, start, end, working_format)
     estimated = estimate_lossless_video_bytes(
         end - start,
         float(video_info.get("fps", 0) or 0),
@@ -107,6 +135,8 @@ def build_import_plan(
         start_time=start,
         end_time=end,
         estimated_bytes=estimated,
+        working_format=working_format,
+        audio_mode=audio_mode,
     )
 
 
@@ -141,8 +171,16 @@ def format_timecode(seconds: float, *, milliseconds: bool = False) -> str:
     return f"{hours:02d}:{minutes:02d}:{int(round(remaining)):02d}"
 
 
-def segment_file_name(source: Path, start: float, end: float) -> str:
+def segment_file_name(
+    source: Path,
+    start: float,
+    end: float,
+    working_format: str = "mkv_lossless",
+) -> str:
+    if working_format not in WORKING_FORMATS:
+        raise MediaImportPlanError("Escolha um formato de trabalho válido")
     safe_stem = re.sub(r"[^A-Za-z0-9À-ÿ._-]+", "_", source.stem).strip("._") or "filme"
     start_label = format_timecode(start).replace(":", "-")
     end_label = format_timecode(end).replace(":", "-")
-    return f"{safe_stem}_trecho_{start_label}_a_{end_label}.mkv"
+    extension = WORKING_FORMATS[working_format]["extension"]
+    return f"{safe_stem}_trecho_{start_label}_a_{end_label}{extension}"

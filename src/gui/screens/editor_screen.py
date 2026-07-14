@@ -2759,6 +2759,15 @@ class EditorScreen:
             info = self.video_processor.get_video_info(file_path)
             context.check_cancelled()
             info["file_size"] = os.path.getsize(file_path)
+            if selection.is_segment:
+                context.report(45, "Verificando os canais de áudio...")
+                info["audio_analysis"] = self.video_processor.analyze_audio_balance(
+                    file_path,
+                    selection.start_time,
+                    (selection.end_time or selection.start_time)
+                    - selection.start_time,
+                )
+                context.check_cancelled()
             context.report(100, "Análise concluída")
             return info
 

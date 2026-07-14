@@ -15,6 +15,33 @@ from core.storage import format_bytes, storage_preflight
 from gui.mousewheel import mousewheel_units
 
 
+WORKING_FORMAT_LABELS = {
+    "mkv_lossless": "MKV sem perdas — FFV1 + PCM",
+    "mov_prores": "MOV de edição — ProRes 422 HQ + PCM",
+    "mp4_hq": "MP4 alta qualidade — H.264 + AAC",
+}
+WORKING_FORMAT_NOTES = {
+    "mkv_lossless": (
+        "Preservação recomendada: imagem e áudio sem perdas, ideal para restauração "
+        "frame por frame. Gera arquivos maiores."
+    ),
+    "mov_prores": (
+        "Compatibilidade profissional: ProRes 422 HQ e áudio PCM em contêiner MOV. "
+        "É muito fiel, mas não matematicamente sem perdas."
+    ),
+    "mp4_hq": (
+        "Arquivo menor e fácil de reproduzir. Usa compressão com perdas e não é "
+        "recomendado como matriz de preservação."
+    ),
+}
+AUDIO_MODE_LABELS = {
+    "preserve": "Preservar os canais exatamente como estão",
+    "dual_mono_left": "Duplicar o canal esquerdo nos dois lados",
+    "dual_mono_right": "Duplicar o canal direito nos dois lados",
+    "mono_mix": "Misturar os canais e centralizar nos dois lados",
+}
+
+
 class ImportModeDialog:
     """Ask what should be imported before any media analysis starts."""
 
@@ -535,6 +562,12 @@ class ImportVideoDialog:
                 else format_timecode(duration, milliseconds=True)
             )
         )
+        self.working_format_var = tk.StringVar(value="mkv_lossless")
+        audio_analysis = self.video_info.get("audio_analysis", {})
+        suggested_audio_mode = audio_analysis.get("suggested_mode", "preserve")
+        if suggested_audio_mode not in AUDIO_MODE_LABELS:
+            suggested_audio_mode = "preserve"
+        self.audio_mode_var = tk.StringVar(value=suggested_audio_mode)
         if mode == "segment":
             interval = tk.Frame(body, bg="#17131f")
             interval.pack(fill=tk.X, padx=26, pady=(16, 0))
@@ -564,6 +597,78 @@ class ImportVideoDialog:
             interval.columnconfigure(2, weight=1)
             self.start_entry.bind("<KeyRelease>", lambda _event: self._refresh())
             self.end_entry.bind("<KeyRelease>", lambda _event: self._refresh())
+
+            format_panel = tk.Frame(body, bg="#241c31", padx=15, pady=13)
+            format_panel.pack(fill=tk.X, padx=26, pady=(16, 0))
+            tk.Label(
+                format_panel,
+                text="Formato do trecho de trabalho",
+                font=("Segoe UI", 11, "bold"),
+                fg="#f5f3f7",
+                bg="#241c31",
+            ).pack(anchor=tk.W)
+            self.format_combo = ttk.Combobox(
+                format_panel,
+                state="readonly",
+                values=list(WORKING_FORMAT_LABELS.values()),
+                width=54,
+            )
+            self.format_combo.set(WORKING_FORMAT_LABELS["mkv_lossless"])
+            self.format_combo.pack(fill=tk.X, pady=(7, 5))
+            self.format_combo.bind("<<ComboboxSelected>>", self._format_changed)
+            self.format_note_var = tk.StringVar()
+            tk.Label(
+                format_panel,
+                textvariable=self.format_note_var,
+                font=("Segoe UI", 9),
+                fg="#b8afc4",
+                bg="#241c31",
+                wraplength=620,
+                justify=tk.LEFT,
+            ).pack(anchor=tk.W)
+
+            audio_panel = tk.Frame(body, bg="#2b1d2b", padx=15, pady=13)
+            audio_panel.pack(fill=tk.X, padx=26, pady=(12, 0))
+            tk.Label(
+                audio_panel,
+                text="Canais de áudio",
+                font=("Segoe UI", 11, "bold"),
+                fg="#f5f3f7",
+                bg="#2b1d2b",
+            ).pack(anchor=tk.W)
+            analysis_summary = audio_analysis.get(
+                "summary", "O áudio não recebeu uma recomendação automática."
+            )
+            tk.Label(
+                audio_panel,
+                text=analysis_summary,
+                font=("Segoe UI", 9),
+                fg="#fbbf24" if suggested_audio_mode != "preserve" else "#b8afc4",
+                bg="#2b1d2b",
+                wraplength=620,
+                justify=tk.LEFT,
+            ).pack(anchor=tk.W, pady=(5, 6))
+            self.audio_combo = ttk.Combobox(
+                audio_panel,
+                state="readonly",
+                values=list(AUDIO_MODE_LABELS.values()),
+                width=54,
+            )
+            self.audio_combo.set(AUDIO_MODE_LABELS[suggested_audio_mode])
+            self.audio_combo.pack(fill=tk.X)
+            self.audio_combo.bind("<<ComboboxSelected>>", self._audio_changed)
+            tk.Label(
+                audio_panel,
+                text=(
+                    "O tratamento afeta somente a cópia de trabalho. O arquivo "
+                    "original permanece intocado e a escolha fica registrada."
+                ),
+                font=("Segoe UI", 9),
+                fg="#b8afc4",
+                bg="#2b1d2b",
+                wraplength=620,
+                justify=tk.LEFT,
+            ).pack(anchor=tk.W, pady=(6, 0))
 
         estimate = tk.Frame(body, bg="#1d2937", padx=15, pady=13)
         estimate.pack(fill=tk.X, padx=26, pady=(18, 0))
@@ -595,18 +700,7 @@ class ImportVideoDialog:
         self.space_label.pack(anchor=tk.W, pady=(2, 0))
 
         if mode == "segment":
-            tk.Label(
-                body,
-                text=(
-                    "O trecho usa FFV1 intraframe e áudio PCM. É maior que um vídeo "
-                    "comum, mas não adiciona perdas antes da restauração frame por frame."
-                ),
-                font=("Segoe UI", 9),
-                fg="#b8afc4",
-                bg="#17131f",
-                wraplength=650,
-                justify=tk.LEFT,
-            ).pack(anchor=tk.W, padx=26, pady=(12, 18))
+            tk.Frame(body, bg="#17131f", height=18).pack(fill=tk.X)
 
         footer = tk.Frame(self.window, bg="#201829", padx=26, pady=14)
         footer.grid(row=1, column=0, sticky="ew")
@@ -649,6 +743,22 @@ class ImportVideoDialog:
             self.body_canvas.yview_scroll(units, "units")
         return "break"
 
+    def _format_changed(self, _event=None):
+        selected_label = self.format_combo.get()
+        for value, label in WORKING_FORMAT_LABELS.items():
+            if label == selected_label:
+                self.working_format_var.set(value)
+                break
+        self._refresh()
+
+    def _audio_changed(self, _event=None):
+        selected_label = self.audio_combo.get()
+        for value, label in AUDIO_MODE_LABELS.items():
+            if label == selected_label:
+                self.audio_mode_var.set(value)
+                break
+        self._refresh()
+
     def _current_plan(self):
         return build_import_plan(
             self.source_path,
@@ -656,6 +766,8 @@ class ImportVideoDialog:
             self.video_info,
             start_value=self.start_var.get(),
             end_value=self.end_var.get(),
+            working_format=self.working_format_var.get(),
+            audio_mode=self.audio_mode_var.get(),
         )
 
     def _refresh(self):
@@ -676,6 +788,10 @@ class ImportVideoDialog:
                 f"Necessário com reserva: {format_bytes(preflight.required_bytes)} • {suffix}"
             )
             self.space_label.config(fg="#86efac" if preflight.enough else "#fca5a5")
+            if plan.is_segment:
+                self.format_note_var.set(WORKING_FORMAT_NOTES[plan.working_format])
+                format_name = WORKING_FORMAT_LABELS[plan.working_format].split(" —", 1)[0]
+                self.start_button.config(text=f"Importar trecho em {format_name}")
             self.start_button.config(state=tk.NORMAL if preflight.enough else tk.DISABLED)
         except (MediaImportPlanError, OSError) as error:
             self.estimate_var.set(str(error))

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 from collections import deque
@@ -151,21 +152,48 @@ class VideoProcessor:
         end_time: float,
         progress_callback: Optional[ProgressCallback] = None,
         cancel_callback: Optional[CancellationCallback] = None,
+        working_format: str = "mkv_lossless",
+        audio_mode: str = "preserve",
     ) -> bool:
-        """Create an exact intra-frame FFV1 segment for restoration work."""
+        """Create an exact-time working segment in the selected container."""
         if start_time < 0 or end_time <= start_time:
             raise ValueError("Invalid segment range")
         duration = end_time - start_time
         command = self._build_lossless_segment_command(
-            input_path, output_path, start_time, end_time
+            input_path,
+            output_path,
+            start_time,
+            end_time,
+            working_format=working_format,
+            audio_mode=audio_mode,
         )
         return self._run_ffmpeg(
             command, duration, progress_callback, cancel_callback
         )
 
     def _build_lossless_segment_command(
-        self, input_path: str, output_path: str, start_time: float, end_time: float
+        self,
+        input_path: str,
+        output_path: str,
+        start_time: float,
+        end_time: float,
+        *,
+        working_format: str = "mkv_lossless",
+        audio_mode: str = "preserve",
     ) -> List[str]:
+        if working_format not in {"mkv_lossless", "mov_prores", "mp4_hq"}:
+            raise ValueError("Invalid working format")
+        audio_filters = {
+            "preserve": None,
+            "dual_mono_left": "pan=stereo|c0=c0|c1=c0",
+            "dual_mono_right": "pan=stereo|c0=c1|c1=c1",
+            "mono_mix": (
+                "pan=mono|c0=0.707*c0+0.707*c1,"
+                "alimiter=limit=0.95,pan=stereo|c0=c0|c1=c0"
+            ),
+        }
+        if audio_mode not in audio_filters:
+            raise ValueError("Invalid audio mode")
         duration = end_time - start_time
         command = self._ffmpeg_prefix()
         command.extend(
@@ -182,23 +210,141 @@ class VideoProcessor:
                 "0:a?",
                 "-map_metadata",
                 "0",
-                "-c:v",
-                "ffv1",
-                "-level",
-                "3",
-                "-g",
-                "1",
-                "-slicecrc",
-                "1",
-                "-c:a",
-                "pcm_s24le",
-                "-avoid_negative_ts",
-                "make_zero",
-                "-y",
-                output_path,
             ]
         )
+        audio_filter = audio_filters[audio_mode]
+        if audio_filter:
+            command.extend(["-af", audio_filter, "-ac", "2"])
+        if working_format == "mkv_lossless":
+            command.extend(
+                [
+                    "-c:v",
+                    "ffv1",
+                    "-level",
+                    "3",
+                    "-g",
+                    "1",
+                    "-slicecrc",
+                    "1",
+                    "-c:a",
+                    "pcm_s24le",
+                ]
+            )
+        elif working_format == "mov_prores":
+            command.extend(
+                [
+                    "-c:v",
+                    "prores_ks",
+                    "-profile:v",
+                    "3",
+                    "-pix_fmt",
+                    "yuv422p10le",
+                    "-c:a",
+                    "pcm_s24le",
+                ]
+            )
+        else:
+            command.extend(
+                [
+                    "-c:v",
+                    *self._h264_video_options("restoration"),
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "320k",
+                    "-movflags",
+                    "+faststart",
+                ]
+            )
+        command.extend(
+            ["-avoid_negative_ts", "make_zero", "-y", output_path]
+        )
         return command
+
+    def analyze_audio_balance(
+        self,
+        video_path: str,
+        start_time: float = 0.0,
+        duration: float = 8.0,
+    ) -> Dict:
+        """Measure the first stereo audio stream and suggest a reversible fix."""
+        sample_duration = max(1.0, min(8.0, float(duration or 8.0)))
+        command = [
+            executable_path("ffmpeg"),
+            "-hide_banner",
+            "-nostats",
+            "-ss",
+            str(max(0.0, float(start_time))),
+            "-t",
+            str(sample_duration),
+            "-i",
+            video_path,
+            "-map",
+            "0:a:0?",
+            "-af",
+            "astats=metadata=0:reset=0",
+            "-f",
+            "null",
+            "-",
+        ]
+        LOGGER.info("Análise de canais iniciada: comando=%r", command)
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+                creationflags=self._creation_flags(),
+            )
+        except (OSError, subprocess.SubprocessError):
+            LOGGER.exception("Análise de canais falhou: caminho=%r", video_path)
+            return {
+                "suggested_mode": "preserve",
+                "summary": "Não foi possível analisar o áudio automaticamente.",
+                "rms_db": [],
+            }
+
+        levels = {}
+        current_channel = None
+        for line in result.stderr.splitlines():
+            channel_match = re.search(r"Channel:\s*(\d+)", line)
+            if channel_match:
+                current_channel = int(channel_match.group(1))
+                continue
+            rms_match = re.search(r"RMS level dB:\s*(-?inf|[-+]?\d+(?:\.\d+)?)", line)
+            if rms_match and current_channel and current_channel not in levels:
+                value = rms_match.group(1).lower()
+                levels[current_channel] = float("-inf") if "inf" in value else float(value)
+
+        left = levels.get(1)
+        right = levels.get(2)
+        left_silent = left is not None and left < -80
+        right_silent = right is not None and right < -80
+        if left_silent and right is not None and not right_silent:
+            suggested_mode = "dual_mono_right"
+            summary = "Canal esquerdo sem sinal; áudio ativo somente no canal direito."
+        elif right_silent and left is not None and not left_silent:
+            suggested_mode = "dual_mono_left"
+            summary = "Canal direito sem sinal; áudio ativo somente no canal esquerdo."
+        elif left is None and right is None:
+            suggested_mode = "preserve"
+            summary = "Nenhuma faixa de áudio analisável foi encontrada."
+        elif left_silent and right_silent:
+            suggested_mode = "preserve"
+            summary = "A amostra analisada está silenciosa nos dois canais."
+        else:
+            suggested_mode = "preserve"
+            summary = "Os canais analisados contêm sinal; preservação exata recomendada."
+        analysis = {
+            "suggested_mode": suggested_mode,
+            "summary": summary,
+            "rms_db": [levels[index] for index in sorted(levels) if index <= 2],
+        }
+        LOGGER.info("Análise de canais concluída: resultado=%r", analysis)
+        return analysis
 
     def extract_frames(
         self,

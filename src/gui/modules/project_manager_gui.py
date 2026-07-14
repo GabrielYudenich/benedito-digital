@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 
 from lib.modules.project.manage import ProjectManager as BaseProjectManager
 from lib.modules.project.workspace import ProjectWorkspace
-from core.media_import import MediaImportPlan
+from core.media_import import MediaImportPlan, WORKING_FORMATS
 from core.storage import require_free_space
 
 class ProjectManagerGUI(BaseProjectManager):
@@ -283,8 +283,9 @@ class ProjectManagerGUI(BaseProjectManager):
                     raise FileExistsError(f"Já existe um vídeo chamado {video_name}")
                 require_free_space(destination.parent, import_plan.estimated_bytes)
                 temporary = destination.with_name(
-                    f".{destination.stem}.{uuid.uuid4().hex}.mkv"
+                    f".{destination.stem}.{uuid.uuid4().hex}{destination.suffix}"
                 )
+                format_info = WORKING_FORMATS[import_plan.working_format]
                 try:
                     try:
                         success = video_processor.create_lossless_segment(
@@ -297,6 +298,8 @@ class ProjectManagerGUI(BaseProjectManager):
                                 if progress_callback else None
                             ),
                             cancel_callback=cancel_callback,
+                            working_format=import_plan.working_format,
+                            audio_mode=import_plan.audio_mode,
                         )
                         if not success:
                             raise RuntimeError("FFmpeg não conseguiu gerar o trecho")
@@ -314,8 +317,11 @@ class ProjectManagerGUI(BaseProjectManager):
                                 "source_modified_ns": import_plan.source_path.stat().st_mtime_ns,
                                 "start_time": import_plan.start_time,
                                 "end_time": import_plan.end_time,
-                                "video_codec": "ffv1",
-                                "audio_codec": "pcm_s24le",
+                                "working_format": import_plan.working_format,
+                                "audio_mode": import_plan.audio_mode,
+                                "container": destination.suffix.lower().lstrip("."),
+                                "video_codec": format_info["video_codec"],
+                                "audio_codec": format_info["audio_codec"],
                             },
                             cancel_callback=cancel_callback,
                         )
