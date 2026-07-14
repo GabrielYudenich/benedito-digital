@@ -221,6 +221,21 @@ class DarkTheme:
         style.map('Dark.Vertical.TScrollbar',
                  background=[('active', cls.COLORS['bg_hover'])])
 
+        style.configure(
+            'Dark.Treeview',
+            background=cls.COLORS['bg_tertiary'],
+            fieldbackground=cls.COLORS['bg_tertiary'],
+            foreground=cls.COLORS['text_primary'],
+            borderwidth=0,
+            rowheight=25,
+            font=cls.FONTS['small'],
+        )
+        style.map(
+            'Dark.Treeview',
+            background=[('selected', cls.COLORS['accent_primary'])],
+            foreground=[('selected', cls.COLORS['text_inverse'])],
+        )
+
         # Separator styles
         style.configure('Dark.TSeparator',
                       background=cls.COLORS['border_light'])

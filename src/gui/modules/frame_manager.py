@@ -54,6 +54,19 @@ class FrameManager:
             print(f"Error refreshing frames list: {e}")
             self.frames_list = []
 
+    def set_frames_dir(self, frames_dir: str):
+        """Switch the active source without mixing frame sequences."""
+        target = os.path.abspath(frames_dir)
+        if os.path.abspath(self.frames_dir) == target:
+            self.refresh_frames_list()
+            return
+        self.frames_dir = target
+        os.makedirs(self.frames_dir, exist_ok=True)
+        self.current_index = 0
+        self.loaded_frame = None
+        self.loaded_photo = None
+        self.refresh_frames_list()
+
     # Backwards-compatible aliases used by editor_screen
     def refresh_frame_list(self):
         self.refresh_frames_list()

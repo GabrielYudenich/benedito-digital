@@ -226,11 +226,27 @@ class ProjectManagerGUI(BaseProjectManager):
             return os.path.join(self.current_project_path, 'videos', 'original')
         return None
 
-    def get_frames_dir(self) -> Optional[str]:
+    def get_frames_dir(self, video_name: str = None) -> Optional[str]:
         if self.workspace is not None:
-            return str(self.workspace.frames_dir)
+            if video_name:
+                legacy_frames = any(
+                    path.is_file()
+                    and path.suffix.lower() in {'.jpg', '.jpeg', '.png'}
+                    for path in self.workspace.frames_dir.iterdir()
+                )
+                if legacy_frames and len(self.get_project_videos()) <= 1:
+                    return str(self.workspace.frames_dir)
+            return str(self.workspace.get_frames_dir(video_name))
         if self.current_project_path:
-            return os.path.join(self.current_project_path, 'frames')
+            frames_dir = os.path.join(self.current_project_path, 'frames')
+            if video_name:
+                from core.media_browser import media_frame_directory_name
+
+                frames_dir = os.path.join(
+                    frames_dir, media_frame_directory_name(video_name)
+                )
+            os.makedirs(frames_dir, exist_ok=True)
+            return frames_dir
         return None
 
     def get_exports_dir(self) -> Optional[str]:
@@ -426,9 +442,12 @@ class ProjectManagerGUI(BaseProjectManager):
             # Count frames
             frames_dir = self.get_frames_dir()
             if os.path.exists(frames_dir):
-                frames = [f for f in os.listdir(frames_dir)
-                         if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-                stats['total_frames'] = len(frames)
+                stats['total_frames'] = sum(
+                    1
+                    for path in Path(frames_dir).rglob("*")
+                    if path.is_file()
+                    and path.suffix.lower() in {'.jpg', '.jpeg', '.png'}
+                )
 
             # Calculate project size
             project_size = 0

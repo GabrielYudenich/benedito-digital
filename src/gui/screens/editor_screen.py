@@ -12,6 +12,8 @@ import json
 import cv2
 import numpy as np
 import shutil
+import threading
+from pathlib import Path
 
 from gui.themes.dark_theme import DarkTheme
 from gui.modules.video_player import VideoPlayer
@@ -30,6 +32,7 @@ from core.damage_analysis import FrameDamageAnalyzer
 from core.jobs import JobManager, JobState
 from core.model_registry import ModelRegistry
 from core.paths import default_models_dir, resource_root
+from core.media_browser import paginate_frame_files
 from core.selections import polygon_mask, rectangle_mask, selection_bounds
 from core.storage import estimate_lossless_frames_bytes, require_free_space
 from core.accessibility import AccessibilityPreferences
@@ -165,6 +168,11 @@ class EditorScreen:
         self.redo_stack = []
         self._play_pulse_job = None
         self._play_pulse_state = False
+        self._playback_ui_lock = threading.Lock()
+        self._pending_playback_frame = None
+        self._pending_playback_progress = None
+        self._pending_playback_finished = False
+        self._playback_ui_job = None
         self._models_last_mtime = 0
         self._status_anim_job = None
         self._status_anim_phase = 0
@@ -180,6 +188,8 @@ class EditorScreen:
         self.current_frame = self.project_state.get_current_frame()
         self.total_frames = self.frame_manager.get_frame_count() or self.project_state.get_total_frames()
         self.is_playing = False
+        self.audio_enabled_var = tk.BooleanVar(value=True)
+        self.current_video = None
         self.current_video_path = self.project_state.get_video_path()
         self.selected_tool = "brush"
 
@@ -188,6 +198,7 @@ class EditorScreen:
         self.setup_ui()
         DarkTheme.apply_accessibility(self.root, self.accessibility_preferences)
         self.load_project_videos()
+        self._playback_ui_job = self.root.after(16, self._drain_playback_ui)
         self.root.after(250, self._show_state_recovery_notice)
 
         # Bind cleanup
@@ -650,6 +661,7 @@ class EditorScreen:
         """Create left media browser panel"""
         left_frame = DarkTheme.create_custom_frame(parent, 'DarkSecondary.TFrame')
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 2))
+        left_frame.configure(width=310)
 
         # Panel header
         header_frame = DarkTheme.create_custom_frame(left_frame, 'DarkTertiary.TFrame')
@@ -693,29 +705,46 @@ class EditorScreen:
         )
         self.proxy_btn.pack(side=tk.RIGHT, padx=(0, 2), pady=5)
 
+        self.frames_btn = tk.Button(
+            header_frame,
+            text="Frames",
+            font=('Arial', 9, 'bold'),
+            bg=DarkTheme.COLORS['bg_tertiary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            relief=tk.FLAT,
+            bd=0,
+            padx=8,
+            pady=5,
+            cursor='hand2',
+            command=self.show_extraction_options,
+        )
+        self.frames_btn.pack(side=tk.RIGHT, padx=(0, 2), pady=5)
+
         # Media list
         media_frame = DarkTheme.create_custom_frame(left_frame, 'DarkSecondary.TFrame')
         media_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
 
-        scrollbar = tk.Scrollbar(media_frame, bg=DarkTheme.COLORS['bg_tertiary'])
+        scrollbar = ttk.Scrollbar(
+            media_frame,
+            orient=tk.VERTICAL,
+            style='Dark.Vertical.TScrollbar',
+        )
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.media_listbox = tk.Listbox(
+        self.media_tree = ttk.Treeview(
             media_frame,
-            bg=DarkTheme.COLORS['bg_tertiary'],
-            fg=DarkTheme.COLORS['text_primary'],
-            selectbackground=DarkTheme.COLORS['accent_primary'],
-            selectforeground=DarkTheme.COLORS['text_inverse'],
+            show="tree",
+            selectmode="browse",
             yscrollcommand=scrollbar.set,
-            font=('Arial', 10),
-            relief=tk.FLAT,
-            bd=0,
-            highlightthickness=0
+            style='Dark.Treeview',
         )
-        self.media_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.media_listbox.yview)
-
-        self.media_listbox.bind('<<ListboxSelect>>', self.on_media_select)
+        self.media_tree.column("#0", width=270, minwidth=180, stretch=True)
+        self.media_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.media_tree.yview)
+        self._media_tree_items = {}
+        self._media_video_items = {}
+        self.media_tree.bind('<<TreeviewSelect>>', self.on_media_select)
+        self.media_tree.bind('<<TreeviewOpen>>', self._on_media_tree_open)
 
     def create_center_panel(self, parent):
         """Create center main workspace panel"""
@@ -770,6 +799,19 @@ class EditorScreen:
             command=self.on_seek
         )
         self.progress_bar.pack(fill=tk.X, padx=10, pady=10)
+
+        audio_toggle = tk.Checkbutton(
+            controls_frame,
+            text="Reproduzir áudio",
+            variable=self.audio_enabled_var,
+            command=self._toggle_reference_audio,
+            bg=DarkTheme.COLORS['bg_secondary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            selectcolor=DarkTheme.COLORS['bg_tertiary'],
+            activebackground=DarkTheme.COLORS['bg_secondary'],
+            activeforeground=DarkTheme.COLORS['text_primary'],
+        )
+        audio_toggle.pack(anchor=tk.W, padx=10, pady=(0, 8))
 
     def create_frame_tab(self):
         """Create frame viewer tab"""
@@ -2542,11 +2584,154 @@ class EditorScreen:
     def load_project_videos(self):
         try:
             videos = self.project_manager.get_project_videos()
-            self.media_listbox.delete(0, tk.END)
+            for item in self.media_tree.get_children(""):
+                self.media_tree.delete(item)
+            self._media_tree_items.clear()
+            self._media_video_items.clear()
             for video in videos:
-                self.media_listbox.insert(tk.END, f"🎬 {video}")
+                video_item = self.media_tree.insert(
+                    "", tk.END, text=f"🎬 {video}", open=False
+                )
+                self._media_tree_items[video_item] = {
+                    "kind": "video",
+                    "video": video,
+                }
+                self._media_video_items[video] = video_item
+
+                proxy_path = (
+                    self.workspace.get_proxy_path(video) if self.workspace else None
+                )
+                proxy_text = (
+                    f"⚡ Proxy: {proxy_path.name}"
+                    if proxy_path
+                    else "◇ Proxy ainda não criado"
+                )
+                proxy_item = self.media_tree.insert(
+                    video_item, tk.END, text=proxy_text
+                )
+                self._media_tree_items[proxy_item] = {
+                    "kind": "proxy",
+                    "video": video,
+                }
+
+                frames_dir = self.project_manager.get_frames_dir(video)
+                pages = paginate_frame_files(frames_dir, page_size=100)
+                frame_count = sum(len(page.files) for page in pages)
+                frames_item = self.media_tree.insert(
+                    video_item,
+                    tk.END,
+                    text=f"🖼 Frames ({frame_count})",
+                    open=False,
+                )
+                self._media_tree_items[frames_item] = {
+                    "kind": "frames",
+                    "video": video,
+                }
+                if not pages:
+                    extract_item = self.media_tree.insert(
+                        frames_item,
+                        tk.END,
+                        text="＋ Extrair frames sem perda...",
+                    )
+                    self._media_tree_items[extract_item] = {
+                        "kind": "extract",
+                        "video": video,
+                    }
+                    continue
+                for page in pages:
+                    page_item = self.media_tree.insert(
+                        frames_item,
+                        tk.END,
+                        text=(
+                            f"Página {page.number}: "
+                            f"frames {page.start_index + 1}–{page.end_index + 1}"
+                        ),
+                    )
+                    self._media_tree_items[page_item] = {
+                        "kind": "page",
+                        "video": video,
+                        "page": page,
+                        "loaded": False,
+                    }
+                    self.media_tree.insert(page_item, tk.END, text="Carregar página...")
         except Exception as e:
-            print(f"Error loading videos: {e}")
+            self.logger.exception("Error loading media tree")
+            self.status_var.set(f"Não foi possível atualizar a árvore de mídia: {e}")
+
+    def _on_media_tree_open(self, _event=None):
+        item = self.media_tree.focus()
+        metadata = self._media_tree_items.get(item, {})
+        if metadata.get("kind") != "page" or metadata.get("loaded"):
+            return
+        for child in self.media_tree.get_children(item):
+            self.media_tree.delete(child)
+        page = metadata["page"]
+        for offset, filename in enumerate(page.files):
+            frame_item = self.media_tree.insert(item, tk.END, text=filename)
+            self._media_tree_items[frame_item] = {
+                "kind": "frame",
+                "video": metadata["video"],
+                "filename": filename,
+                "index": page.start_index + offset,
+            }
+        metadata["loaded"] = True
+
+    def _selected_media_video(self):
+        selection = self.media_tree.selection()
+        if not selection:
+            return None
+        return self._media_tree_items.get(selection[0], {}).get("video")
+
+    def select_media_video(self, video_name):
+        item = self._media_video_items.get(video_name)
+        if not item:
+            return False
+        self.media_tree.item(item, open=True)
+        self.media_tree.selection_set(item)
+        self.media_tree.focus(item)
+        self.media_tree.see(item)
+        return True
+
+    def _activate_video_frames(self, video_name):
+        frames_dir = self.project_manager.get_frames_dir(video_name)
+        self.frame_manager.set_frames_dir(frames_dir)
+        if self.workspace is not None:
+            self.workspace.active_video_name = video_name
+        self.total_frames = self.frame_manager.get_frame_count()
+        self.current_frame = self.frame_manager.current_frame_index
+
+    def on_media_select(self, _event=None):
+        selection = self.media_tree.selection()
+        if not selection:
+            return
+        metadata = self._media_tree_items.get(selection[0], {})
+        video_name = metadata.get("video")
+        kind = metadata.get("kind")
+        if not video_name or kind in {"frames", "page"}:
+            return
+        if kind == "extract":
+            if self.current_video != video_name:
+                self.load_video(video_name)
+            self.root.after_idle(self.show_extraction_options)
+            return
+        if kind == "frame":
+            if self.current_video != video_name:
+                self.load_video(video_name)
+            else:
+                self._activate_video_frames(video_name)
+            try:
+                frame_index = self.frame_manager.frames.index(metadata["filename"])
+            except ValueError:
+                frame_index = metadata["index"]
+            self.frame_manager.current_frame_index = frame_index
+            self.current_frame = frame_index
+            self.notebook.select(1)
+            self.show_current_frame()
+            self.update_frame_counter()
+            return
+        if self.current_video == video_name and self.video_player.is_loaded():
+            return
+        self.load_video(video_name)
 
     def import_video(self):
         file_path = filedialog.askopenfilename(
@@ -2623,8 +2808,10 @@ class EditorScreen:
 
         def import_complete(video_name):
             self.load_project_videos()
+            self.select_media_video(video_name)
+            self.load_video(video_name)
             self.status_var.set("Vídeo importado e verificado com sucesso!")
-            self.open_proxy_dialog(video_name)
+            self.open_proxy_dialog(video_name, offer_extraction=True)
 
         job = self._start_ui_job(
             "Importação de trecho" if import_plan.is_segment else "Importação completa",
@@ -2636,14 +2823,11 @@ class EditorScreen:
         if job is None:
             self.import_btn.config(state=tk.NORMAL)
 
-    def on_media_select(self, event):
-        selection = self.media_listbox.curselection()
-        if selection:
-            video_name = self.media_listbox.get(selection[0]).replace("🎬 ", "")
-            self.load_video(video_name)
-
     def load_video(self, video_name):
         try:
+            if self.is_playing:
+                self.video_player.stop_playback()
+                self._finish_playback_ui()
             original_path = os.path.join(
                 self.project_manager.get_originals_dir(), video_name
             )
@@ -2653,6 +2837,7 @@ class EditorScreen:
             if self.video_player.load_video(video_path):
                 self.current_video = video_name
                 self.current_video_path = original_path
+                self._activate_video_frames(video_name)
                 playback_label = "proxy leve" if proxy_path else "original"
                 self.status_var.set(
                     f"Vídeo carregado: {video_name} — reprodução pelo {playback_label}"
@@ -2667,17 +2852,21 @@ class EditorScreen:
 
                 self.video_info_label.config(text=info_text)
                 self.show_video_frame(0)
+                self.video_player.seek(0)
+                self.progress_var.set(0)
+                self.time_label.config(
+                    text=f"00:00:00 / {self.format_time(video_info.get('duration', 0))}"
+                )
+                self.update_frame_counter()
             else:
                 messagebox.showerror("Erro", "Falha ao carregar vídeo.")
         except Exception as e:
             messagebox.showerror("Erro", f"Erro ao carregar vídeo: {str(e)}")
 
-    def open_proxy_dialog(self, video_name=None):
+    def open_proxy_dialog(self, video_name=None, offer_extraction=False):
         target_video = video_name or self.current_video
         if not target_video:
-            selection = self.media_listbox.curselection()
-            if selection:
-                target_video = self.media_listbox.get(selection[0]).replace("🎬 ", "")
+            target_video = self._selected_media_video()
         if not target_video:
             messagebox.showinfo(
                 "Escolha um vídeo", "Selecione um vídeo na lista para criar o proxy."
@@ -2694,11 +2883,16 @@ class EditorScreen:
             self.root,
             video_info,
             lambda width: self._start_proxy_creation(
-                target_video, original_path, width
+                target_video,
+                original_path,
+                width,
+                offer_extraction=offer_extraction,
             ),
         )
 
-    def _start_proxy_creation(self, video_name, original_path, width):
+    def _start_proxy_creation(
+        self, video_name, original_path, width, offer_extraction=False
+    ):
         stem = os.path.splitext(video_name)[0]
         output_path = os.path.join(
             str(self.workspace.proxies_dir), f"{stem}_proxy_{width}.mp4"
@@ -2725,48 +2919,125 @@ class EditorScreen:
 
         def proxy_complete(path):
             self.status_var.set(f"Proxy pronto: {os.path.basename(path)}")
-            if self.current_video == video_name:
-                self.load_video(video_name)
+            self.load_project_videos()
+            self.select_media_video(video_name)
+            self.load_video(video_name)
+            if offer_extraction:
+                self._offer_frame_extraction(video_name)
 
         self._start_ui_job("Criação de proxy", proxy_task, proxy_complete)
+
+    def _offer_frame_extraction(self, video_name):
+        frames_dir = Path(self.project_manager.get_frames_dir(video_name))
+        if paginate_frame_files(frames_dir, page_size=1):
+            return
+        should_extract = messagebox.askyesno(
+            "Proxy pronto — criar frames?",
+            "O proxy de referência está pronto. Os frames para restauração quadro a "
+            "quadro são uma etapa separada porque podem ocupar bastante espaço.\n\n"
+            "Deseja revisar a estimativa e extrair os frames agora?",
+            parent=self.root,
+        )
+        if should_extract:
+            self.root.after(100, self.show_extraction_options)
+        else:
+            self.status_var.set(
+                "Proxy pronto. Use Mídia > Frames > Extrair frames quando desejar."
+            )
 
     def show_video_frame(self, frame_number=None):
         frame = self.video_player.get_frame(frame_number)
         if frame is not None:
-            import cv2
-            from PIL import Image, ImageTk
+            self._render_video_frame(frame)
 
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            canvas_width = self.video_canvas.winfo_width()
-            canvas_height = self.video_canvas.winfo_height()
+    def _render_video_frame(self, frame):
+        from PIL import Image, ImageTk
 
-            if canvas_width > 1 and canvas_height > 1:
-                frame_resized = cv2.resize(frame_rgb, (canvas_width, canvas_height))
-                image = Image.fromarray(frame_resized)
-                photo = ImageTk.PhotoImage(image=image)
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        canvas_width = self.video_canvas.winfo_width()
+        canvas_height = self.video_canvas.winfo_height()
+        if canvas_width <= 1 or canvas_height <= 1:
+            return
+        source_height, source_width = frame_rgb.shape[:2]
+        scale = min(canvas_width / source_width, canvas_height / source_height)
+        target_width = max(1, int(source_width * scale))
+        target_height = max(1, int(source_height * scale))
+        frame_resized = cv2.resize(frame_rgb, (target_width, target_height))
+        image = Image.fromarray(frame_resized)
+        photo = ImageTk.PhotoImage(image=image)
+        self.video_canvas.delete("all")
+        self.video_canvas.create_image(
+            canvas_width // 2,
+            canvas_height // 2,
+            image=photo,
+        )
+        self.video_canvas.image = photo
 
-                self.video_canvas.delete("all")
-                self.video_canvas.create_image(canvas_width//2, canvas_height//2, image=photo)
-                self.video_canvas.image = photo
+    def _queue_video_frame(self, frame):
+        with self._playback_ui_lock:
+            self._pending_playback_frame = frame
+
+    def _queue_playback_progress(self, progress):
+        with self._playback_ui_lock:
+            self._pending_playback_progress = progress
+
+    def _queue_playback_finished(self):
+        with self._playback_ui_lock:
+            self._pending_playback_finished = True
+
+    def _drain_playback_ui(self):
+        with self._playback_ui_lock:
+            frame = self._pending_playback_frame
+            progress = self._pending_playback_progress
+            finished = self._pending_playback_finished
+            self._pending_playback_frame = None
+            self._pending_playback_progress = None
+            self._pending_playback_finished = False
+        if frame is not None:
+            self._render_video_frame(frame)
+        if progress is not None:
+            self.update_playback_progress(progress)
+        if finished:
+            self._finish_playback_ui()
+        try:
+            self._playback_ui_job = self.root.after(16, self._drain_playback_ui)
+        except tk.TclError:
+            self._playback_ui_job = None
 
     # Playback controls
     def toggle_playback(self):
-        if not self.video_player:
+        if not self.video_player or not self.video_player.is_loaded():
+            messagebox.showinfo(
+                "Player de referência",
+                "Selecione um vídeo ou proxy na árvore de mídia antes de reproduzir.",
+            )
             return
 
-        self.is_playing = not self.is_playing
-
-        if self.is_playing:
+        if not self.is_playing:
+            self.is_playing = True
             self.play_btn.config(text="⏸️")
             self._start_play_pulse()
             self.video_player.start_playback(
-                callback=self.show_video_frame,
-                progress_callback=self.update_playback_progress
+                callback=self._queue_video_frame,
+                progress_callback=self._queue_playback_progress,
+                audio_enabled=self.audio_enabled_var.get(),
+                finished_callback=self._queue_playback_finished,
             )
         else:
-            self.play_btn.config(text="▶️")
-            self._stop_play_pulse()
             self.video_player.stop_playback()
+            self._finish_playback_ui()
+
+    def _finish_playback_ui(self):
+        self.is_playing = False
+        self.play_btn.config(text="▶️")
+        self._stop_play_pulse()
+
+    def _toggle_reference_audio(self):
+        enabled = self.audio_enabled_var.get()
+        self.video_player.set_audio_enabled(enabled)
+        self.status_var.set(
+            "Áudio de referência ativado" if enabled else "Áudio de referência silenciado"
+        )
 
     def _start_play_pulse(self):
         if self.reduced_motion:
@@ -2811,13 +3082,15 @@ class EditorScreen:
         total_str = self.format_time(duration)
         self.time_label.config(text=f"{current_str} / {total_str}")
         if progress >= 99.9:
-            self.is_playing = False
-            self.play_btn.config(text="▶️")
-            self._stop_play_pulse()
+            self._finish_playback_ui()
 
     def on_seek(self, value):
-        if not self.video_player:
+        if not self.video_player or not self.video_player.is_loaded():
             return
+
+        if self.is_playing:
+            self.video_player.stop_playback()
+            self._finish_playback_ui()
 
         progress = float(value)
         video_info = self.video_player.get_video_info()
@@ -2826,6 +3099,7 @@ class EditorScreen:
 
         self.video_player.seek_to_time(current_time)
         self.show_video_frame()
+        self.video_player.seek_to_time(current_time)
 
         current_str = self.format_time(current_time)
         total_str = self.format_time(duration)
@@ -5866,11 +6140,17 @@ class EditorScreen:
         self._extract_frames_thread()
 
     def show_extraction_options(self):
-        if not self.current_video:
-            messagebox.showwarning("Aviso", "Selecione um vídeo primeiro.")
+        target_video = self.current_video or self._selected_media_video()
+        if not target_video:
+            messagebox.showwarning(
+                "Escolha uma fonte",
+                "Selecione um vídeo na árvore de mídia antes de extrair os frames.",
+            )
             return
+        if self.current_video != target_video:
+            self.load_video(target_video)
         originals_dir = self.project_manager.get_originals_dir()
-        frames_dir = self.project_manager.get_frames_dir()
+        frames_dir = self.project_manager.get_frames_dir(self.current_video)
         video_path = os.path.join(originals_dir, self.current_video)
         video_info = self.video_processor.get_video_info(video_path)
 
@@ -5890,7 +6170,8 @@ class EditorScreen:
     def _extract_frames_thread(self):
         project_path = self.project_manager.get_current_project_path()
         input_path = os.path.join(self.project_manager.get_originals_dir(), self.current_video)
-        frames_dir = self.project_manager.get_frames_dir()
+        frames_dir = self.project_manager.get_frames_dir(self.current_video)
+        self.frame_manager.set_frames_dir(frames_dir)
         fps_text = self.fps_entry.get().strip()
         if not fps_text or fps_text.lower() in {"original", "orig", "fonte"}:
             fps = None
@@ -5945,10 +6226,20 @@ class EditorScreen:
         def extract_complete(_result):
             if self.frame_manager is None:
                 self.frame_manager = FrameManager(project_path)
+            self.frame_manager.set_frames_dir(frames_dir)
             self.frame_manager.refresh_frames_list()
+            self.total_frames = self.frame_manager.get_frame_count()
+            self.current_frame = self.frame_manager.current_frame_index
+            self.load_project_videos()
+            self.select_media_video(self.current_video)
+            self.notebook.select(1)
             self.show_current_frame()
             self.update_frame_counter()
-            messagebox.showinfo("Sucesso", "Frames extraídos sem perda com sucesso!")
+            messagebox.showinfo(
+                "Frames prontos",
+                f"{self.total_frames} frames foram extraídos sem perda.\n\n"
+                "Eles agora aparecem em páginas na árvore de mídia.",
+            )
 
         def extract_failed(error):
             messagebox.showerror("Erro", f"Erro ao extrair frames: {error}")
@@ -6336,6 +6627,9 @@ class EditorScreen:
             # Cleanup resources
             if self.video_player:
                 self.video_player.release()
+            if self._playback_ui_job:
+                self.root.after_cancel(self._playback_ui_job)
+                self._playback_ui_job = None
             self._stop_play_pulse()
             if self.video_renderer:
                 self.video_renderer.cleanup_temp_directory()

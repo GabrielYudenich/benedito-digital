@@ -5,10 +5,17 @@ Handles video playback with hardware acceleration support
 
 import cv2
 import numpy as np
+import logging
+import subprocess
 import threading
 import time
 from typing import Optional, Callable, Tuple
 import os
+
+from core.paths import executable_path
+
+
+logger = logging.getLogger(__name__)
 
 class VideoPlayer:
     def __init__(self, use_gpu: bool = True):
@@ -19,6 +26,9 @@ class VideoPlayer:
         self.fps = 30.0
         self.is_playing = False
         self.playback_thread: Optional[threading.Thread] = None
+        self.video_path: Optional[str] = None
+        self.audio_enabled = True
+        self.audio_process: Optional[subprocess.Popen] = None
 
         # GPU acceleration setup
         self.gpu_available = self._check_gpu_available()
@@ -67,6 +77,7 @@ class VideoPlayer:
     def load_video(self, video_path: str) -> bool:
         """Load video file with optimal backend"""
         try:
+            self.stop_playback()
             if self.cap:
                 self.cap.release()
 
@@ -95,11 +106,16 @@ class VideoPlayer:
                 self.fps = 30.0
 
             self.current_frame = 0
+            self.video_path = os.path.abspath(video_path)
             return True
 
         except Exception as e:
             print(f"Error loading video: {e}")
+            self.video_path = None
             return False
+
+    def is_loaded(self) -> bool:
+        return bool(self.cap and self.cap.isOpened() and self.video_path)
 
     def get_frame(self, frame_number: int = None) -> Optional[np.ndarray]:
         """Get frame with GPU acceleration if available"""
@@ -151,38 +167,51 @@ class VideoPlayer:
 
     def start_playback(self, callback: Callable[[np.ndarray], None],
                       progress_callback: Callable[[float], None] = None,
-                      fps_override: float = None):
+                      fps_override: float = None,
+                      audio_enabled: bool = True,
+                      finished_callback: Callable[[], None] = None):
         """Start video playback with callback for each frame"""
-        if self.is_playing:
+        if self.is_playing or not self.is_loaded():
             return
 
         self.is_playing = True
-        playback_fps = fps_override or self.fps
+        self.audio_enabled = bool(audio_enabled)
+        playback_fps = max(0.1, float(fps_override or self.fps))
+        frame_interval = 1.0 / playback_fps
+        self._start_audio_playback()
 
         def playback_loop():
-            while self.is_playing and self.cap and self.cap.isOpened():
-                frame = self.get_frame()
-                if frame is None:
-                    break
+            next_frame_at = time.monotonic()
+            try:
+                while self.is_playing and self.cap and self.cap.isOpened():
+                    frame = self.get_frame()
+                    if frame is None:
+                        break
 
-                # Call callback with frame
-                if callback:
-                    callback(frame)
+                    if callback:
+                        callback(frame)
 
-                # Update progress
-                if progress_callback:
-                    progress = (self.current_frame / self.total_frames) * 100 if self.total_frames > 0 else 0
-                    progress_callback(progress)
+                    self.current_frame += 1
+                    if progress_callback:
+                        progress = (
+                            (self.current_frame / self.total_frames) * 100
+                            if self.total_frames > 0
+                            else 0
+                        )
+                        progress_callback(min(100.0, progress))
 
-                # Control playback speed
-                time.sleep(1.0 / playback_fps)
+                    if self.current_frame >= self.total_frames:
+                        break
 
-                self.current_frame += 1
-
-                if self.current_frame >= self.total_frames:
-                    break
-
-            self.is_playing = False
+                    next_frame_at += frame_interval
+                    remaining = next_frame_at - time.monotonic()
+                    if remaining > 0:
+                        time.sleep(remaining)
+            finally:
+                self.is_playing = False
+                self._stop_audio_playback()
+                if finished_callback:
+                    finished_callback()
 
         self.playback_thread = threading.Thread(target=playback_loop, daemon=True)
         self.playback_thread.start()
@@ -190,8 +219,67 @@ class VideoPlayer:
     def stop_playback(self):
         """Stop video playback"""
         self.is_playing = False
-        if self.playback_thread:
+        self._stop_audio_playback()
+        if self.playback_thread and self.playback_thread is not threading.current_thread():
             self.playback_thread.join(timeout=1.0)
+        self.playback_thread = None
+
+    def set_audio_enabled(self, enabled: bool):
+        self.audio_enabled = bool(enabled)
+        if not self.is_playing:
+            return
+        self._stop_audio_playback()
+        if self.audio_enabled:
+            self._start_audio_playback()
+
+    def _start_audio_playback(self):
+        if not self.audio_enabled or not self.video_path:
+            return
+        self._stop_audio_playback()
+        start_time = self.current_frame / self.fps if self.fps > 0 else 0.0
+        command = [
+            executable_path("ffplay"),
+            "-nodisp",
+            "-autoexit",
+            "-loglevel",
+            "error",
+            "-ss",
+            f"{start_time:.6f}",
+            "-i",
+            self.video_path,
+            "-vn",
+        ]
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            self.audio_process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+            logger.debug(
+                "Reference audio started: path=%s start=%.3fs pid=%s",
+                self.video_path,
+                start_time,
+                self.audio_process.pid,
+            )
+        except OSError:
+            self.audio_process = None
+            logger.exception("Could not start reference audio with ffplay")
+
+    def _stop_audio_playback(self):
+        process = self.audio_process
+        self.audio_process = None
+        if process is None or process.poll() is not None:
+            return
+        try:
+            process.terminate()
+            process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        except OSError:
+            logger.debug("Reference audio process already closed", exc_info=True)
 
     def seek(self, frame_number: int):
         """Seek to specific frame"""
@@ -230,6 +318,7 @@ class VideoPlayer:
         if self.cap:
             self.cap.release()
             self.cap = None
+        self.video_path = None
 
     def __del__(self):
         """Cleanup on deletion"""

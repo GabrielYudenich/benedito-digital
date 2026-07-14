@@ -39,7 +39,7 @@ datas = [
 binaries = []
 vendor_bin = VENDOR_FFMPEG / "bin"
 for path in sorted(vendor_bin.glob("*")):
-    if path.name.lower() not in {"ffmpeg.exe", "ffprobe.exe"} and path.suffix.lower() != ".dll":
+    if path.name.lower() not in {"ffmpeg.exe", "ffprobe.exe", "ffplay.exe"} and path.suffix.lower() != ".dll":
         continue
     if path.is_file():
         binaries.append((str(path), "ffmpeg/bin"))

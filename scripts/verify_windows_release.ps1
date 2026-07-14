@@ -42,9 +42,10 @@ try {
     $Application = Get-ChildItem -LiteralPath $ExtractRoot -Recurse -Filter "Benedito Digital.exe" | Select-Object -First 1
     $CommandLine = Get-ChildItem -LiteralPath $ExtractRoot -Recurse -Filter "benedito.exe" | Select-Object -First 1
     $Ffmpeg = Get-ChildItem -LiteralPath $ExtractRoot -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+    $Ffplay = Get-ChildItem -LiteralPath $ExtractRoot -Recurse -Filter "ffplay.exe" | Select-Object -First 1
     $License = Get-ChildItem -LiteralPath $ExtractRoot -Recurse -Filter "LICENSE.txt" | Where-Object { $_.FullName -match 'licenses\\ffmpeg' } | Select-Object -First 1
     $Provenance = Get-ChildItem -LiteralPath $ExtractRoot -Recurse -Filter "provenance.json" | Where-Object { $_.FullName -match 'licenses\\ffmpeg' } | Select-Object -First 1
-    if ($null -eq $Application -or $null -eq $CommandLine -or $null -eq $Ffmpeg -or $null -eq $License -or $null -eq $Provenance) {
+    if ($null -eq $Application -or $null -eq $CommandLine -or $null -eq $Ffmpeg -or $null -eq $Ffplay -or $null -eq $License -or $null -eq $Provenance) {
         throw "O MSI não contém todos os executáveis e avisos legais esperados"
     }
 
@@ -58,6 +59,10 @@ try {
     $FfmpegVersion = & $Ffmpeg.FullName -hide_banner -version 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "O FFmpeg empacotado não iniciou"
+    }
+    $FfplayVersion = & $Ffplay.FullName -hide_banner -version 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "O FFplay empacotado não iniciou"
     }
 
     $CliHelp = & $CommandLine.FullName --help 2>&1
@@ -81,6 +86,7 @@ try {
         extracted_files = $Files.Count
         extracted_size = $Files.Sum
         ffmpeg = ($FfmpegVersion | Select-Object -First 1)
+        ffplay = ($FfplayVersion | Select-Object -First 1)
         cli = ($CliHelp | Select-Object -First 1)
         gui_smoke_seconds = $GuiSmokeSeconds
         msi_signature = [string]$MsiSignature.Status

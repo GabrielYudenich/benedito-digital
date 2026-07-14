@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Union
 
 from core.storage import require_free_space
+from core.media_browser import media_frame_directory_name
 
 try:
     from .migrations import (
@@ -687,9 +688,13 @@ class ProjectWorkspace:
             path = self.object_path(str(artifact.get("sha256", "")))
             if path.is_file():
                 return {"path": path, "kind": "edited", "artifact": artifact}
+        frames_dir = self.frames_dir
+        active_video_name = getattr(self, "active_video_name", None)
+        if active_video_name:
+            frames_dir = self.get_frames_dir(active_video_name)
         originals = sorted(
             path
-            for path in self.frames_dir.iterdir()
+            for path in frames_dir.iterdir()
             if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
         )
         if frame_number < len(originals):
@@ -877,6 +882,14 @@ class ProjectWorkspace:
             return None
         path = self._resolve_portable_path(record["path"])
         return path if path.is_file() else None
+
+    def get_frames_dir(self, video_name: Optional[str] = None) -> Path:
+        """Return the frame root or a deterministic directory for one source."""
+        if not video_name:
+            return self.frames_dir
+        directory = self.frames_dir / media_frame_directory_name(video_name)
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
 
     @staticmethod
     def hash_file(

@@ -43,7 +43,8 @@ if (-not $SkipApp) {
 
 $Ffmpeg = Join-Path $VendorBin "ffmpeg.exe"
 $Ffprobe = Join-Path $VendorBin "ffprobe.exe"
-if ((-not (Test-Path $Ffmpeg) -or -not (Test-Path $Ffprobe)) -and -not $AllowExternalFfmpeg) {
+$Ffplay = Join-Path $VendorBin "ffplay.exe"
+if ((-not (Test-Path $Ffmpeg) -or -not (Test-Path $Ffprobe) -or -not (Test-Path $Ffplay)) -and -not $AllowExternalFfmpeg) {
     & (Join-Path $PSScriptRoot "prepare_ffmpeg.ps1")
 }
 
