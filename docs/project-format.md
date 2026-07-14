@@ -86,6 +86,11 @@ mediano e a mascara das regioes estaveis. As operacoes `clean_plate.build` e
 frames realmente modificados. `auto_dust.repair` registra a mascara automatica e o frame
 resultante; limpar os pontos visuais nao altera o original.
 
+Quando o usuario define um recorte global para a placa, `application_region.png` preserva
+essa mascara e o artefato `application_region` entra em `clean_plate.build`. O recorte e
+reaplicado a todo o segmento salvo, enquanto selecoes de outros frames sao ignoradas para
+evitar limites inconsistentes.
+
 ## Processamento em chunks
 
 Filtros e restauracoes por intervalo sao divididos em chunks de frames. Cada chunk so e

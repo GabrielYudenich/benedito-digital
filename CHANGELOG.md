@@ -33,6 +33,9 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - intervalos reutilizáveis por cena ou posição de câmera, com detecção automática de cortes;
 - placa limpa para câmera estática, com fundo mediano e proteção de foreground;
 - menu de sujeira automática com detecção, correção, ocultação e remoção por frame.
+- visão geral colorida para trecho ativo, segmentos de câmera e frame atual;
+- reprodução silenciosa dos frames em ambos os sentidos, de `0.25x` a `4x`;
+- recorte espacial reutilizável em todo o segmento de uma placa limpa.
 
 ### Alterado
 
@@ -42,6 +45,8 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - frames de fontes diferentes passam a usar diretórios separados.
 - pincel e borracha passam a interpolar o traço, respeitar o raio e salvar apenas ao soltar;
 - o controle das miniaturas permanece visível junto à navegação entre problemas.
+- zoom das miniaturas passa a usar botões de lupa e todas as barras recebem nomes claros;
+- placas limpas passam a continuar sobre a derivação estabilizada quando ela estiver ativa.
 
 ### Segurança
 

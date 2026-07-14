@@ -39,6 +39,12 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
    de restauração sem perder as marcações do frame.
 5. Use `Segunda tela` para duplicar o frame em uma janela independente, movê-la para
    outro monitor e alternar tela cheia com `F11`.
+6. A barra `Navegar por todos os frames` muda o frame atual. A barra `Deslocar
+   miniaturas` move apenas a faixa de imagens.
+7. Altere as miniaturas com `🔍 − Menores` e `🔍 + Maiores`; não existe mais uma barra
+   de zoom sem identificação.
+8. Em `Revisão sem áudio`, escolha de `0.25x` a `4x`. Use `◀` para revisar voltando,
+   `■` para pausar e `▶` para avançar pelo trecho de trabalho.
 
 **4. Navegar e editar frames**
 1. Vá para a aba `Frames`.
@@ -53,15 +59,23 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
    `Corrigir pontos detectados`. Também é possível ocultar ou apagar a detecção do frame.
 
 **5. Separar cenas e construir uma placa limpa**
-1. Defina um intervalo com `I` e `O` e abra `Cenas/câmeras` na barra inferior.
-2. Salve o intervalo atual ou use a detecção automática de cortes. Ao escolher um
+1. Digite o primeiro e o último frame em `Trecho de trabalho` — por exemplo, `61` e
+   `817` — e clique em `Aplicar trecho`. Também é possível usar `I = atual` e `O = atual`.
+2. A visão geral mostra o trecho ativo em roxo, o frame atual em branco e segmentos
+   salvos em cores. Abra `Cenas/câmeras` e salve o intervalo como `Câmera 1`.
+3. Salve o intervalo atual ou use a detecção automática de cortes. Ao escolher um
    segmento, estabilização, filtros, restauração e placa limpa passam a usar esse trecho.
-3. Em uma cena de câmera estática, clique em `Placa limpa`.
-4. O Benedito alinha amostras, calcula um fundo mediano e mede se a câmera realmente
+4. No gerenciador de cenas, use `Estabilizar câmera` para aplicar estabilização automática
+   somente ao segmento selecionado.
+5. Para limitar a placa a uma parte do cenário, escolha `Retângulo` ou `Laço` no frame
+   representativo, marque o fundo e depois use `Criar placa limpa`.
+6. Ative `Usar a seleção atual como recorte em todo o trecho`. O mesmo recorte será
+   reutilizado nos frames do segmento, sem depender de uma seleção separada em cada frame.
+7. O Benedito alinha amostras, calcula um fundo mediano e mede se a câmera realmente
    permaneceu estática antes de alterar qualquer frame.
-5. A aplicação usa somente sujeiras pequenas no fundo estável. Rostos, braços e outros
+8. A aplicação usa somente sujeiras pequenas no fundo estável. Rostos, braços e outros
    movimentos grandes são protegidos e permanecem no frame original.
-6. Se a câmera se mover além do limite seguro, a placa é preservada para inspeção, mas
+9. Se a câmera se mover além do limite seguro, a placa é preservada para inspeção, mas
    não é aplicada automaticamente. Estabilize ou reduza o segmento e tente novamente.
 
 **6. Restaurar**

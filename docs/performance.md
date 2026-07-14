@@ -75,3 +75,11 @@ A placa limpa usa no máximo 15 amostras do intervalo para construir o fundo med
 aplicar, somente o frame atual, os dois vizinhos, a placa e as máscaras ficam na memória.
 Objetos grandes que diferem do fundo são tratados como foreground protegido. Por segurança,
 uma câmera considerada móvel impede a aplicação automática e mantém os frames intactos.
+
+Quando existe estabilização manual ou automática ativa, a placa usa essa sequência como
+entrada e grava o resultado na mesma derivação estabilizada. Uma seleção espacial pode ser
+reutilizada como recorte em todo o segmento, evitando centenas de máscaras repetidas.
+
+A reprodução da aba Frames é silenciosa e limitada ao trecho ativo. Ela usa o FPS conhecido
+da referência, permite `0.25x`, `0.5x`, `1x`, `2x` e `4x` e pula posições intermediárias se
+a decodificação de PNGs grandes não acompanhar o relógio, mantendo a interface responsiva.

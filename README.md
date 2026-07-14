@@ -37,6 +37,7 @@ A branch `develop` concentra a validação da próxima versão. A fundação atu
 - detecção conservadora de sujeira transitória com correção explícita e máscara descartável;
 - intervalos reutilizáveis por cena ou posição de câmera;
 - placa limpa de fundo estático com proteção de pessoas e objetos em movimento;
+- visão geral dos segmentos e reprodução silenciosa dos frames entre `0.25x` e `4x`;
 - armazenamento deduplicado de artefatos por conteúdo;
 - restauração e filtros por intervalo com progresso real;
 - detecção e alinhamento de película pelas perfurações laterais;
