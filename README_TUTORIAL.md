@@ -29,24 +29,23 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 2. Mantenha `FPS = Original` para preservar a cadência do material.
 3. Revise duração, resolução, quantidade estimada e espaço em disco.
 4. Acompanhe porcentagem, etapa e tempo restante na Central de Progresso.
-5. Ao concluir, expanda as páginas de 100 frames na árvore para abrir um quadro específico.
+5. Ao concluir, clique em `Frames` no painel lateral. Escolha `Lista` ou `Miniaturas`,
+   busque pelo número do frame e navegue pelas páginas sem carregar a sequência inteira.
 
 **4. Navegar e inspecionar frames**
 1. Use `Ctrl + roda do mouse` para ampliar a região sob o cursor.
 2. Segure o botão direito e arraste para mover o frame ampliado.
 3. Use `Ajustar` para voltar à imagem inteira.
-4. Use `Ocultar miniaturas`, ao lado da navegação de problemas, para maximizar a área
-   de restauração sem perder as marcações do frame.
+4. As miniaturas ficam no painel lateral. Alterne para `Lista` quando quiser reservar
+   mais espaço ou localizar frames apenas pelo número e estado.
 5. Use `Segunda tela` para duplicar o frame em uma janela independente, movê-la para
    outro monitor e alternar tela cheia com `F11`.
-6. A barra `Navegar por todos os frames` muda o frame atual. A barra `Deslocar
-   miniaturas` move apenas a faixa de imagens.
-7. Altere as miniaturas com `🔍 − Menores` e `🔍 + Maiores`; não existe mais uma barra
-   de zoom sem identificação.
-8. Em `Revisão sem áudio`, escolha de `0.25x` a `4x`. Use `◀` para revisar voltando,
+6. A barra `Navegar por todos os frames` muda o frame atual. O catálogo lateral acompanha
+   o frame e troca de página automaticamente quando necessário.
+7. Em `Revisão sem áudio`, escolha de `0.25x` a `4x`. Use `◀` para revisar voltando,
    `■` para pausar e `▶` para avançar pelo trecho de trabalho.
 
-**4. Navegar e editar frames**
+**5. Navegar e editar frames**
 1. Vá para a aba `Frames`.
 2. Use as setas do teclado para navegar.
 3. Use `I` para início de intervalo e `O` para fim.
@@ -57,16 +56,21 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 8. Cada traço, Undo e Redo permanece registrado na branch sem alterar o original.
 9. Em `Auto sujeira`, primeiro detecte os pontos amarelos e depois escolha
    `Corrigir pontos detectados`. Também é possível ocultar ou apagar a detecção do frame.
+10. Pressione `Shift+S` ou abra `Editar > Estado do frame > Sinalizar` para registrar
+    Poeira, Risco, Mancha, Perfuração, Revisar ou Aprovado com uma observação opcional.
+11. O aviso aparece discretamente na visão geral e com sua própria cor no catálogo lateral.
+    Use o filtro de estado para revisar somente um tipo de problema.
 
-**5. Separar cenas e construir uma placa limpa**
+**6. Separar posicionamentos e construir uma placa limpa**
 1. Digite o primeiro e o último frame em `Trecho de trabalho` — por exemplo, `61` e
-   `817` — e clique em `Aplicar trecho`. Também é possível usar `I = atual` e `O = atual`.
-2. A visão geral mostra o trecho ativo em roxo, o frame atual em branco e segmentos
-   salvos em cores. Abra `Cenas/câmeras` e salve o intervalo como `Câmera 1`.
-3. Salve o intervalo atual ou use a detecção automática de cortes. Ao escolher um
-   segmento, estabilização, filtros, restauração e placa limpa passam a usar esse trecho.
-4. No gerenciador de cenas, use `Estabilizar câmera` para aplicar estabilização automática
-   somente ao segmento selecionado.
+   `817`. O trecho fica ativo imediatamente; também é possível usar `I = atual` e `O = atual`.
+2. A visão geral mostra o trecho ativo em roxo, o frame atual em branco, avisos em cores e
+   posicionamentos salvos. Abra `Posicionamentos` e salve o intervalo como `Posição 1`.
+3. Salve o intervalo atual ou use a detecção automática em sensibilidade Detalhada,
+   Equilibrada ou Conservadora. Ao escolher um posicionamento, estabilização, filtros,
+   restauração e placa limpa passam a usar esse trecho.
+4. No gerenciador, use `Estabilizar posicionamento` para aplicar estabilização automática
+   somente ao intervalo selecionado.
 5. Para limitar a placa a uma parte do cenário, escolha `Retângulo` ou `Laço` no frame
    representativo, marque o fundo e depois use `Criar placa limpa`.
 6. Ative `Usar a seleção atual como recorte em todo o trecho`. O mesmo recorte será
@@ -78,39 +82,39 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 9. Se a câmera se mover além do limite seguro, a placa é preservada para inspeção, mas
    não é aplicada automaticamente. Estabilize ou reduza o segmento e tente novamente.
 
-**6. Restaurar**
+**7. Restaurar**
 1. Ajuste o `Preset Global` e o `Perfil`.
 2. Selecione o modelo em `Modelo ML` (DnCNN, SwinIR, Restormer).
 3. Clique em `Restaurar frame atual` ou `Restaurar intervalo`.
 
-**7. Upscale (Super-Resolution)**
+**8. Upscale (Super-Resolution)**
 1. Escolha o engine (`RRDB` ou `SwinIR SR`).
 2. Selecione o peso e a escala (`x2` ou `x4`).
 3. Execute `Upscale frame atual` ou `Upscale intervalo`.
 4. Use `Ver upscale` para comparar.
 
-**8. Preview e render**
+**9. Preview e render**
 1. Clique em `Preview` para gerar um trecho.
 2. Clique em `Renderizar vídeo restaurado` para exportar.
 
-**9. Gerenciar modelos**
+**10. Gerenciar modelos**
 1. Na tela inicial, abra `Configurações`.
 2. Use o `Gerenciador de Modelos` para adicionar ou remover pesos custom.
 3. No editor, também existe o botão `Adicionar peso (.pth)` para facilitar.
 
-**10. Película e perfurações**
+**11. Película e perfurações**
 1. Selecione o intervalo na aba de frames.
 2. Abra `Fluxos > Analisar danos nos frames` para criar marcações.
 3. Use `Fluxos > Alinhar película pelas perfurações` para corrigir o registro.
 4. Frames sem confiança suficiente permanecem intactos para revisão humana.
 
-**11. Trabalhar em equipe**
+**12. Trabalhar em equipe**
 1. Abra `Versionamento > Colaboração da equipe`.
 2. Escolha uma pasta local, NAS ou sincronizada.
 3. Use `Push` para publicar a branch ativa e `Pull` para trazer a branch do colega.
 4. Compare e faça o merge pelo gerenciador visual de branches.
 
-**12. Timeline e scopes**
+**13. Timeline e scopes**
 1. Abra `Editar > Timeline multipista` para adicionar, cortar, mover e sobrepor clipes.
 2. Selecione um clipe e use `Keyframes` para animar propriedades.
 3. Use `Exibir > Scopes de cor` para histograma, waveform e vectorscope.
@@ -126,10 +130,11 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 7. `Ctrl + Shift + T` abre a timeline.
 8. `Ctrl + Shift + C` abre a colaboração.
 9. `Ctrl + Shift + S` abre os scopes.
+10. `Shift + S` abre o painel de revisão e estado do frame.
 
 **Dicas**
 1. Use `Cinema` como preset padrão para equilíbrio.
 2. Use `Nitro` quando quiser máxima qualidade.
-3. O cache de miniaturas é persistente por projeto para acelerar a timeline.
+3. O cache de miniaturas é persistente por projeto para acelerar o catálogo lateral.
 4. Use FPS personalizado somente quando houver uma necessidade técnica específica.
 5. Ocultar a Central de Progresso não interrompe a tarefa; o botão `Ver tarefa` a abre novamente.

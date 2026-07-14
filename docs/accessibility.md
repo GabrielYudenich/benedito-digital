@@ -18,6 +18,7 @@ Atalhos principais:
 - `Ctrl+Shift+T`: timeline;
 - `Ctrl+Shift+C`: colaboração;
 - `Ctrl+Shift+S`: scopes;
+- `Shift+S`: revisão e estado do frame;
 - `F1`: ajuda.
 
 As cores textuais principais são verificadas automaticamente contra contraste WCAG. Uma

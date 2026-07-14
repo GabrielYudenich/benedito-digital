@@ -76,7 +76,7 @@ ao frame original, mantendo a acao reversivel.
 Pinceladas registram pontos, ferramenta, raio e valor da mascara. Ao final do traco, a
 mascara PNG exata tambem e armazenada como objeto, preservando edicao e reproducao fiel.
 
-Segmentos de cena e posicao de camera ficam em `metadata/camera_segments.json`, separados
+Posicionamentos de camera ficam em `metadata/camera_segments.json`, separados
 por fonte. Eles guardam nome, primeiro frame, ultimo frame e confianca da sugestao. O arquivo
 e pequeno e pode ser compartilhado sem copiar a sequencia de imagens.
 

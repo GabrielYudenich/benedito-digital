@@ -35,9 +35,11 @@ A branch `develop` concentra a validação da próxima versão. A fundação atu
 - clone e healing no canvas, limitáveis por seleção e auditáveis por branch;
 - pincel e borracha contínuos, com raio ajustável e gravação ao concluir o traço;
 - detecção conservadora de sujeira transitória com correção explícita e máscara descartável;
-- intervalos reutilizáveis por cena ou posição de câmera;
+- intervalos reutilizáveis por posicionamento de câmera, com detecção ajustável;
 - placa limpa de fundo estático com proteção de pessoas e objetos em movimento;
 - visão geral dos segmentos e reprodução silenciosa dos frames entre `0.25x` e `4x`;
+- catálogo lateral paginado em lista ou miniaturas, com busca por número e filtro de estado;
+- avisos coloridos por frame e painel destacável de revisão acessível por `Shift+S`;
 - armazenamento deduplicado de artefatos por conteúdo;
 - restauração e filtros por intervalo com progresso real;
 - detecção e alinhamento de película pelas perfurações laterais;
@@ -66,7 +68,7 @@ Guias: [película](docs/film-restoration.md), [colaboração](docs/collaboration
 - Central de Progresso com porcentagem, etapa atual, tempo decorrido e estimativa;
 - cancelamento seguro e opção para continuar trabalhando em segundo plano;
 - preparação visual da extração com FPS, quantidade de frames, espaço estimado e espaço livre;
-- árvore de mídia por fonte, com proxies, ação de extração e frames paginados de 100 em 100;
+- árvore de mídia por fonte e catálogo de frames em lista ou miniaturas paginadas;
 - player de referência com proxy, reprodução contínua e áudio opcional;
 - gerenciador visual de branches e histórico por frame;
 - escala de leitura de 90% a 150%.

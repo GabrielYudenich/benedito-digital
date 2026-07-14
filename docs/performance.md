@@ -56,20 +56,22 @@ carregado inteiro na memória. A velocidade ainda depende do codec, do disco e d
 
 ## Navegação dos frames
 
-A faixa inferior mantém somente 11 miniaturas próximas ao frame atual. Miniaturas ausentes
-são geradas por um único worker em segundo plano e substituem os placeholders sem bloquear
-o Tkinter. Arrastar rapidamente o slider também agrupa eventos antes de carregar o frame.
+O catálogo lateral pagina 40 miniaturas ou 100 itens de lista por vez. Miniaturas ausentes
+são geradas em segundo plano, e tamanhos já existentes no cache são reaproveitados antes de
+decodificar novamente um PNG grande. Arrastar rapidamente o slider também agrupa eventos
+antes de carregar o frame.
 
 O zoom renderiza apenas o viewport visível, em vez de criar uma imagem ampliada gigante na
 memória. `Ctrl + roda` ancora o zoom no cursor e botão direito + arrasto move a imagem. O
-painel inferior pode ser recolhido, e `Segunda tela` abre uma visualização independente para
-monitores adicionais.
+catálogo lateral pode alternar para lista, e `Segunda tela` abre uma visualização independente
+para monitores adicionais.
 
-## Cenas e placa limpa
+## Posicionamentos e placa limpa
 
-A detecção de cenas lê no máximo cerca de mil miniaturas distribuídas pela sequência e
+A detecção de posicionamentos lê no máximo cerca de 360 amostras distribuídas pela sequência e
 refina somente os cortes candidatos. Ela não carrega todos os frames de um filme longo na
-memória. Os intervalos salvos podem ser reutilizados por estabilização, filtros e restauração.
+memória. A sensibilidade pode ser Detalhada, Equilibrada ou Conservadora, e os intervalos
+salvos podem ser reutilizados por estabilização, filtros e restauração.
 
 A placa limpa usa no máximo 15 amostras do intervalo para construir o fundo mediano. Ao
 aplicar, somente o frame atual, os dois vizinhos, a placa e as máscaras ficam na memória.

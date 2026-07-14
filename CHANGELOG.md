@@ -26,16 +26,19 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - formatos de trecho selecionáveis: MKV/FFV1, MOV/ProRes 422 HQ e MP4/H.264;
 - análise de canais e centralização opcional de áudio presente somente em um lado.
 - dropdowns escuros com contraste consistente no campo e na lista de opções;
-- filmstrip não bloqueante com 11 miniaturas próximas e cache gerado em segundo plano;
+- catálogo lateral não bloqueante, paginado e com cache gerado em segundo plano;
 - zoom ancorado no cursor, pan com botão direito e render somente do viewport visível;
-- painel inferior recolhível e visualização duplicada para um segundo monitor;
+- visualização duplicada para um segundo monitor;
 - ícones nas ferramentas de seleção, pintura, borracha, clone e healing.
-- intervalos reutilizáveis por cena ou posição de câmera, com detecção automática de cortes;
+- intervalos reutilizáveis por posicionamento de câmera, com detecção automática de cortes;
 - placa limpa para câmera estática, com fundo mediano e proteção de foreground;
 - menu de sujeira automática com detecção, correção, ocultação e remoção por frame.
-- visão geral colorida para trecho ativo, segmentos de câmera e frame atual;
+- visão geral colorida para trecho ativo, posicionamentos, avisos e frame atual;
 - reprodução silenciosa dos frames em ambos os sentidos, de `0.25x` a `4x`;
 - recorte espacial reutilizável em todo o segmento de uma placa limpa.
+- catálogo lateral paginado em lista ou miniaturas, com busca por número e filtro de estado;
+- avisos coloridos no catálogo e na visão geral para cada estado de revisão do frame;
+- painel destacável de revisão com observação, navegação e atalho `Shift+S`.
 
 ### Alterado
 
@@ -44,8 +47,9 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - versão interna elevada para `1.1.0` como candidata de pré-lançamento.
 - frames de fontes diferentes passam a usar diretórios separados.
 - pincel e borracha passam a interpolar o traço, respeitar o raio e salvar apenas ao soltar;
-- o controle das miniaturas permanece visível junto à navegação entre problemas.
-- zoom das miniaturas passa a usar botões de lupa e todas as barras recebem nomes claros;
+- miniaturas deixam a área inferior e passam ao catálogo lateral, preservando o canvas;
+- trechos digitados ou definidos por `I` e `O` passam a ficar ativos sem botão de confirmação;
+- cenas/câmeras passam a se chamar posicionamentos de câmera, com detecção mais sensível à composição;
 - placas limpas passam a continuar sobre a derivação estabilizada quando ela estiver ativa.
 
 ### Segurança
