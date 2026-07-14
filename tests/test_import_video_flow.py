@@ -133,6 +133,7 @@ def test_confirmed_mode_is_analyzed_then_forwarded_to_review(monkeypatch, tmp_pa
     jobs = []
     reviews = []
     import_button = FakeButton()
+    audio_calls = []
 
     def start_job(*arguments):
         jobs.append(arguments)
@@ -147,7 +148,15 @@ def test_confirmed_mode_is_analyzed_then_forwarded_to_review(monkeypatch, tmp_pa
                 "fps": 24.0,
                 "width": 1920,
                 "height": 1080,
-            }
+            },
+            analyze_audio_balance=lambda path, start, duration: (
+                audio_calls.append((path, start, duration))
+                or {
+                    "suggested_mode": "dual_mono_right",
+                    "summary": "Canal esquerdo sem sinal.",
+                    "rms_db": [float("-inf"), -20.0],
+                }
+            ),
         ),
         project_manager=SimpleNamespace(get_originals_dir=lambda: str(tmp_path)),
         _start_ui_job=start_job,
@@ -176,6 +185,8 @@ def test_confirmed_mode_is_analyzed_then_forwarded_to_review(monkeypatch, tmp_pa
     assert reviews[0][1] == str(source)
     assert reviews[0][4] == selection
     assert reviews[0][2]["duration"] == 42.0
+    assert reviews[0][2]["audio_analysis"]["suggested_mode"] == "dual_mono_right"
+    assert audio_calls == [(str(source), 10.0, 10.0)]
 
 
 def test_segment_selection_has_explicit_visual_confirmation():

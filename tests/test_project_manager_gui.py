@@ -25,8 +25,11 @@ class FakeLosslessProcessor:
     def create_lossless_segment(
         self, input_path, output_path, start_time, end_time,
         progress_callback=None, cancel_callback=None,
+        working_format="mkv_lossless", audio_mode="preserve",
     ):
-        self.calls.append((input_path, output_path, start_time, end_time))
+        self.calls.append(
+            (input_path, output_path, start_time, end_time, working_format, audio_mode)
+        )
         if self.fail:
             Path(output_path).write_bytes(b"partial")
             raise RuntimeError("interrompido")
@@ -92,7 +95,42 @@ def test_imports_only_selected_segment_and_records_provenance(tmp_path):
     assert record["provenance"]["kind"] == "lossless-segment"
     assert record["provenance"]["start_time"] == 10
     assert record["provenance"]["end_time"] == 20
+    assert record["provenance"]["working_format"] == "mkv_lossless"
+    assert record["provenance"]["audio_mode"] == "preserve"
+    assert record["provenance"]["container"] == "mkv"
     assert progress[-1] == 100
+
+
+def test_mov_segment_records_format_and_audio_treatment(tmp_path):
+    manager = ProjectManagerGUI()
+    manager.project_path = str(tmp_path / "projects")
+    assert manager.create_project_advanced("MOV")
+    assert manager.load_project("MOV") is not None
+    source = tmp_path / "filme.mov"
+    source.write_bytes(b"original source")
+    plan = build_import_plan(
+        source,
+        "segment",
+        {"duration": 20, "fps": 1, "width": 16, "height": 16},
+        start_value="1",
+        end_value="2",
+        working_format="mov_prores",
+        audio_mode="dual_mono_right",
+    )
+    processor = FakeLosslessProcessor()
+
+    assert manager.add_video_to_project(
+        str(source), import_plan=plan, video_processor=processor
+    )
+
+    imported = Path(manager.get_originals_dir()) / plan.destination_name
+    record = next(iter(manager.workspace.data["originals"].values()))
+    assert imported.suffix == ".mov"
+    assert processor.calls[0][1].endswith(".mov")
+    assert processor.calls[0][4:] == ("mov_prores", "dual_mono_right")
+    assert record["provenance"]["container"] == "mov"
+    assert record["provenance"]["video_codec"] == "prores_ks"
+    assert record["provenance"]["audio_mode"] == "dual_mono_right"
 
 
 def test_failed_segment_import_removes_partial_files(tmp_path):

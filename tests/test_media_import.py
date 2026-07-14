@@ -72,6 +72,52 @@ def test_builds_complete_and_exact_segment_plans(tmp_path):
     assert segment.estimated_bytes > source.stat().st_size
 
 
+def test_segment_plan_supports_mov_mp4_and_audio_treatment(tmp_path):
+    source = tmp_path / "Filme Original.mov"
+    source.write_bytes(b"source")
+    info = {"duration": 60, "fps": 24, "width": 1920, "height": 1080}
+
+    mov_plan = build_import_plan(
+        source,
+        "segment",
+        info,
+        start_value="10",
+        end_value="20",
+        working_format="mov_prores",
+        audio_mode="dual_mono_right",
+    )
+    mp4_plan = build_import_plan(
+        source,
+        "segment",
+        info,
+        start_value="10",
+        end_value="20",
+        working_format="mp4_hq",
+    )
+
+    assert mov_plan.destination_name.endswith(".mov")
+    assert mov_plan.working_format == "mov_prores"
+    assert mov_plan.audio_mode == "dual_mono_right"
+    assert mp4_plan.destination_name.endswith(".mp4")
+
+
+def test_segment_plan_rejects_unknown_format_or_audio_mode(tmp_path):
+    source = tmp_path / "film.mov"
+    source.write_bytes(b"source")
+    info = {"duration": 60, "fps": 24, "width": 720, "height": 576}
+
+    with pytest.raises(MediaImportPlanError, match="formato"):
+        build_import_plan(
+            source, "segment", info, start_value="1", end_value="2",
+            working_format="avi",
+        )
+    with pytest.raises(MediaImportPlanError, match="áudio"):
+        build_import_plan(
+            source, "segment", info, start_value="1", end_value="2",
+            audio_mode="automatic",
+        )
+
+
 def test_segment_cannot_exceed_source_duration(tmp_path):
     source = tmp_path / "film.mov"
     source.write_bytes(b"source")
