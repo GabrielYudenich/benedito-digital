@@ -12,6 +12,7 @@ if str(SRC) not in sys.path:
 from core.media_import import (
     MediaImportPlanError,
     build_import_plan,
+    build_import_selection,
     format_timecode,
     parse_timecode,
 )
@@ -34,6 +35,21 @@ def test_invalid_timecodes_are_rejected():
     for value in ("", "00:61", "00:00:60", "-1", "texto"):
         with pytest.raises(MediaImportPlanError):
             parse_timecode(value)
+
+
+def test_segment_minutagem_is_validated_before_analysis():
+    selection = build_import_selection(
+        "segment", start_value="00:12:30", end_value="00:18:45"
+    )
+
+    assert selection.is_segment
+    assert selection.start_time == 750
+    assert selection.end_time == 1125
+
+    with pytest.raises(MediaImportPlanError, match="posterior"):
+        build_import_selection(
+            "segment", start_value="00:18:45", end_value="00:12:30"
+        )
 
 
 def test_builds_complete_and_exact_segment_plans(tmp_path):
