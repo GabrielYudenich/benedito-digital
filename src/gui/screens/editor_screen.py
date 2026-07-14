@@ -47,6 +47,7 @@ from core.clean_plate import (
     detect_transient_defects,
     restrict_defect_mask,
 )
+from core.clean_plate_library import discover_clean_plates, make_clean_plate_id
 from gui.controllers.frame_retouch_controller import FrameRetouchController
 from gui.controllers.film_registration_controller import FilmRegistrationController
 from gui.controllers.collaboration_controller import CollaborationController
@@ -57,6 +58,10 @@ from gui.controllers.project_version_controller import ProjectVersionController
 from gui.dialogs.accessibility_dialog import AccessibilityDialog
 from gui.dialogs.camera_segments_dialog import CameraSegmentsDialog
 from gui.dialogs.clean_plate_dialog import CleanPlateDialog
+from gui.dialogs.clean_plate_manager_dialog import (
+    CleanPlateEditorDialog,
+    CleanPlateManagerDialog,
+)
 from gui.dialogs.damage_analysis_dialog import DamageAnalysisDialog
 from gui.dialogs.extraction_dialog import ExtractionDialog
 from gui.dialogs.frame_review_panel import FrameReviewPanel
@@ -437,6 +442,10 @@ class EditorScreen:
             label="Criar placa limpa do trecho...",
             command=self.open_clean_plate_dialog,
             accelerator=self.shortcut_preferences.get("clean_plate"),
+        )
+        restoration_menu.add_command(
+            label="Gerenciar e editar placas limpas...",
+            command=self.open_clean_plate_manager,
         )
         restoration_menu.add_command(
             label="Estabilizar trecho ativo",
@@ -1406,7 +1415,7 @@ class EditorScreen:
 
         tk.Button(
             tool_actions_bar,
-            text="▣ Placa limpa",
+            text="▣ Placas limpas",
             font=DarkTheme.FONTS['small'],
             bg=DarkTheme.COLORS['bg_tertiary'],
             fg=DarkTheme.COLORS['text_primary'],
@@ -1415,7 +1424,7 @@ class EditorScreen:
             padx=10,
             pady=4,
             cursor='hand2',
-            command=self.open_clean_plate_dialog,
+            command=self.open_clean_plate_manager,
         ).pack(side=tk.LEFT, padx=4)
 
         brush_frame = tk.Frame(
@@ -7110,6 +7119,179 @@ class EditorScreen:
             f"{scope.start + 1}–{scope.end + 1}"
         )
 
+    def _clean_plate_records(self):
+        branch = self.workspace.active_branch if self.workspace else "principal"
+        operations = self.workspace.get_history() if self.workspace else []
+        return discover_clean_plates(self.clean_plates_dir, branch, operations)
+
+    def open_clean_plate_manager(self):
+        records = self._clean_plate_records()
+        CleanPlateManagerDialog(
+            self.root,
+            records,
+            self._open_clean_plate_editor,
+            self._reapply_clean_plate,
+        )
+
+    def _open_clean_plate_editor(self, record, parent=None, on_saved=None):
+        try:
+            CleanPlateEditorDialog(
+                parent or self.root,
+                record,
+                self._save_clean_plate_edit,
+                on_saved=on_saved,
+            )
+        except Exception as exc:
+            messagebox.showerror("Editar placa limpa", str(exc))
+
+    def _save_clean_plate_edit(self, record, original_path):
+        if self.workspace:
+            self.workspace.commit_operation(
+                "clean_plate.edit",
+                payload={
+                    "plate_id": record.plate_id,
+                    "source": record.source,
+                    "start": record.start,
+                    "end": record.end,
+                },
+                artifacts={
+                    "plate": record.plate_path,
+                    "generated_original": original_path,
+                    "background_mask": record.static_mask_path,
+                },
+            )
+        self.status_var.set(
+            f"Placa {record.plate_id} editada — reaplique para atualizar os frames"
+        )
+
+    def _clean_plate_output_dir(self):
+        if self.use_manual_stab_var.get():
+            return self.manual_stab_dir
+        if self.use_auto_stab_var.get():
+            return self.auto_stab_dir
+        return self.restored_dir
+
+    def _reapply_clean_plate(self, record):
+        if not self.frame_manager or not self.frame_manager.frames:
+            messagebox.showwarning("Placa limpa", "Nenhum frame está carregado.")
+            return
+        frames = list(self.frame_manager.frames)
+        frames_dir = self.frame_manager.frames_dir
+        start = max(0, min(record.start, len(frames) - 1))
+        end = max(start, min(record.end, len(frames) - 1))
+        source_paths = [
+            self._get_source_frame_path(frame_index)
+            or os.path.join(frames_dir, filename)
+            for frame_index, filename in enumerate(frames)
+        ]
+        output_dir = self._clean_plate_output_dir()
+
+        def reapply_task(context):
+            plate = cv2.imread(str(record.plate_path), cv2.IMREAD_COLOR)
+            static_mask = cv2.imread(
+                str(record.static_mask_path), cv2.IMREAD_GRAYSCALE
+            )
+            application_region = (
+                cv2.imread(str(record.application_region_path), cv2.IMREAD_GRAYSCALE)
+                if record.application_region_path
+                else None
+            )
+            if plate is None or static_mask is None:
+                raise RuntimeError("Os arquivos da placa limpa estão incompletos.")
+            modified = 0
+            replaced_pixels = 0
+            chunk_artifacts = {}
+            run_id = hashlib.sha256(
+                f"{record.plate_id}:reapply:{time.time_ns()}".encode("utf-8")
+            ).hexdigest()[:16]
+            for position, frame_index in enumerate(range(start, end + 1)):
+                context.check_cancelled()
+                current = cv2.imread(source_paths[frame_index], cv2.IMREAD_COLOR)
+                if current is None:
+                    continue
+                previous = cv2.imread(
+                    source_paths[max(start, frame_index - 1)], cv2.IMREAD_COLOR
+                )
+                following = cv2.imread(
+                    source_paths[min(end, frame_index + 1)], cv2.IMREAD_COLOR
+                )
+                defect_mask = detect_transient_defects(previous, current, following)
+                original_path = os.path.join(frames_dir, frames[frame_index])
+                for extra_path in (
+                    self._mask_path_for_frame(original_path),
+                    self._auto_mask_path_for_frame(original_path),
+                ):
+                    extra = (
+                        cv2.imread(extra_path, cv2.IMREAD_GRAYSCALE)
+                        if os.path.exists(extra_path)
+                        else None
+                    )
+                    if extra is not None:
+                        defect_mask = cv2.bitwise_or(defect_mask, extra)
+                frame_selection = None
+                if application_region is None:
+                    frame_selection = self._load_selection_cv(
+                        original_path, frame_index
+                    )
+                defect_mask = restrict_defect_mask(
+                    defect_mask,
+                    frame_selection=frame_selection,
+                    application_region=application_region,
+                )
+                restored, diagnostics = apply_clean_plate(
+                    current, plate, static_mask, defect_mask
+                )
+                replaced = int(diagnostics["replaced_pixels"])
+                if replaced:
+                    os.makedirs(output_dir, exist_ok=True)
+                    output = os.path.join(output_dir, frames[frame_index])
+                    if not cv2.imwrite(output, restored):
+                        raise RuntimeError(f"Não foi possível salvar {output}")
+                    chunk_artifacts[f"frame_{frame_index:09d}"] = output
+                    modified += 1
+                    replaced_pixels += replaced
+                if len(chunk_artifacts) >= 24 or frame_index == end:
+                    if self.workspace and chunk_artifacts:
+                        self.workspace.commit_operation(
+                            "clean_plate.reapply",
+                            payload={
+                                "plate_id": record.plate_id,
+                                "run_id": run_id,
+                                "start": start,
+                                "end": end,
+                                "foreground_protection": True,
+                                "output_dir": output_dir,
+                            },
+                            artifacts=chunk_artifacts,
+                        )
+                    chunk_artifacts = {}
+                context.report(
+                    (position + 1) * 100.0 / (end - start + 1),
+                    f"Reaplicando placa editada — {position + 1}/{end - start + 1}",
+                )
+            return {
+                "modified": modified,
+                "replaced_pixels": replaced_pixels,
+                "total": end - start + 1,
+                "output_dir": output_dir,
+            }
+
+        def reapply_complete(result):
+            self.view_mode = "restored"
+            self.view_mode_label.config(text="Visualização: restaurado")
+            self.show_current_frame()
+            messagebox.showinfo(
+                "Placa limpa reaplicada",
+                f"Frames modificados: {result['modified']}/{result['total']}\n"
+                f"Pixels de defeitos substituídos: {result['replaced_pixels']:,}\n"
+                f"Resultado: {result['output_dir']}\n\n"
+                "Frames sem defeitos pequenos detectados permanecem intactos.",
+            )
+
+        self._start_ui_job(
+            "Reaplicar placa limpa", reapply_task, reapply_complete
+        )
+
     def open_clean_plate_dialog(self, suggested_segment=None):
         if not self.frame_manager or len(self.frame_manager.frames) < 3:
             messagebox.showinfo(
@@ -7165,19 +7347,17 @@ class EditorScreen:
             or os.path.join(frames_dir, filename)
             for frame_index, filename in enumerate(frames)
         ]
-        if self.use_manual_stab_var.get():
-            clean_plate_output_dir = self.manual_stab_dir
-        elif self.use_auto_stab_var.get():
-            clean_plate_output_dir = self.auto_stab_dir
-        else:
-            clean_plate_output_dir = self.restored_dir
+        clean_plate_output_dir = self._clean_plate_output_dir()
         sample_indices = sorted(
             set(np.linspace(start, end, min(15, end - start + 1), dtype=int).tolist())
         )
         source_name = self._camera_segment_source()
-        plate_id = hashlib.sha256(
-            f"{source_name}:{start}:{end}:{self.workspace.active_branch if self.workspace else 'principal'}".encode("utf-8")
-        ).hexdigest()[:16]
+        plate_id = make_clean_plate_id(
+            source_name,
+            start,
+            end,
+            self.workspace.active_branch if self.workspace else "principal",
+        )
         plate_dir = os.path.join(self.clean_plates_dir, plate_id)
         plate_path = os.path.join(plate_dir, "plate.png")
         static_mask_path = os.path.join(plate_dir, "static_background.png")
@@ -7224,6 +7404,7 @@ class EditorScreen:
                 self.workspace.commit_operation(
                     "clean_plate.build",
                     payload={
+                        "plate_id": plate_id,
                         "source": source_name,
                         "start": start,
                         "end": end,
@@ -7299,6 +7480,9 @@ class EditorScreen:
                 "diagnostics": diagnostics,
                 "modified": modified,
                 "applied": bool(apply_after_build and diagnostics["camera_static"]),
+                "plate_path": plate_path,
+                "total": end - start + 1,
+                "output_dir": clean_plate_output_dir,
             }
 
         def clean_plate_complete(result):
@@ -7314,13 +7498,19 @@ class EditorScreen:
                 self.show_current_frame()
                 messagebox.showinfo(
                     "Placa limpa concluída",
-                    f"Fundo estável: {diagnostics['static_ratio'] * 100:.1f}%\nFrames modificados: {result['modified']}\nPessoas e movimentos grandes foram protegidos.",
+                    f"Fundo estável: {diagnostics['static_ratio'] * 100:.1f}%\n"
+                    f"Frames modificados: {result['modified']}/{result['total']}\n"
+                    f"Placa salva em:\n{result['plate_path']}\n\n"
+                    "Os demais frames não tinham defeitos pequenos considerados seguros. "
+                    "Pessoas e movimentos grandes foram protegidos.",
                 )
             else:
                 messagebox.showinfo(
                     "Placa limpa criada",
-                    f"Fundo estável identificado: {diagnostics['static_ratio'] * 100:.1f}%.",
+                    f"Fundo estável identificado: {diagnostics['static_ratio'] * 100:.1f}%.\n"
+                    f"Placa salva em:\n{result['plate_path']}",
                 )
+            self.open_clean_plate_manager()
 
         self._start_ui_job(
             "Placa limpa de fundo", clean_plate_task, clean_plate_complete
@@ -7643,8 +7833,18 @@ class EditorScreen:
         original = os.path.join(self.frame_manager.frames_dir, frame_name)
         restored = os.path.join(self.restored_dir, frame_name)
         manual = os.path.join(self.manual_stab_dir, frame_name)
+        automatic = os.path.join(self.auto_stab_dir, frame_name)
+        upscaled = os.path.join(self.upscaled_dir, frame_name)
+        if (
+            getattr(self, "view_upscale_var", None) is not None
+            and self.view_upscale_var.get()
+            and os.path.exists(upscaled)
+        ):
+            return upscaled
         if self.use_manual_stab_var.get() and os.path.exists(manual):
             return manual
+        if self.use_auto_stab_var.get() and os.path.exists(automatic):
+            return automatic
         if os.path.exists(restored):
             return restored
         return original

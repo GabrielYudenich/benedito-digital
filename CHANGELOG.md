@@ -53,6 +53,9 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
   ou criar placa limpa;
 - cancelamento cooperativo da estabilização e limpeza imediata do indicador da barra de status;
 - atalhos independentes de Caps Lock e Num Lock.
+- gerenciador de placas limpas com prévia, caminho, diagnóstico e contagem de frames alterados;
+- editor de placa com remoção de ruído, Clone, Healing, zoom, pan, máscara estática e histórico;
+- preservação da placa gerada originalmente e reaplicação explícita da versão editada ao trecho.
 
 ### Alterado
 
@@ -65,6 +68,7 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - trechos digitados ou definidos por `I` e `O` passam a ficar ativos sem botão de confirmação;
 - cenas/câmeras passam a se chamar posicionamentos de câmera, com detecção mais sensível à composição;
 - placas limpas passam a continuar sobre a derivação estabilizada quando ela estiver ativa.
+- a geração e a reaplicação de placas passam a priorizar os frames estabilizados ativos.
 
 ### Segurança
 

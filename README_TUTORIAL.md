@@ -90,7 +90,7 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 7. Para limitar a placa a uma parte do cenário, escolha `Retângulo` ou `Laço` no frame
    representativo, marque o fundo e depois use `Criar placa limpa`.
 8. Abra `Restauração > Criar placa limpa do trecho` — a função também continua disponível
-   no botão `Placa limpa` e no gerenciador de posicionamentos.
+   no gerenciador de posicionamentos.
 9. Ative `Usar a seleção atual como recorte em todo o trecho`. O mesmo recorte será
    reutilizado nos frames do segmento, sem depender de uma seleção separada em cada frame.
 10. O Benedito alinha amostras, calcula um fundo mediano e mede se a câmera realmente
@@ -99,6 +99,12 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
    movimentos grandes são protegidos e permanecem no frame original.
 12. Se a câmera se mover além do limite seguro, a placa é preservada para inspeção, mas
    não é aplicada automaticamente. Estabilize ou reduza o segmento e tente novamente.
+13. Abra o botão `Placas limpas` ou `Restauração > Gerenciar e editar placas limpas` para
+    visualizar a imagem gerada, seu caminho, intervalo e quantos frames foram alterados.
+14. Em `Editar placa`, pinte poeira ou riscos e use `Remover ruído marcado`. Clone e Healing
+    usam o botão direito para definir a origem e o botão esquerdo para aplicar o retoque.
+15. Salve a placa e escolha `Reaplicar ao trecho`. A imagem gerada originalmente fica
+    preservada em `plate_original.png`, e os frames sem defeitos seguros continuam intactos.
 
 **7. Restaurar**
 1. Abra `Propriedades > Abrir propriedades avançadas` para ajustar o `Preset Global` e
