@@ -5,7 +5,6 @@ Professional video editor interface with dark theme
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-from tkinter import simpledialog
 import os
 import hashlib
 import json
@@ -31,6 +30,7 @@ from lib.utils.presets import get_global_preset_settings
 from lib.utils.logger import get_logger
 from core.chunks import ChunkedFrameRunner
 from core.damage_analysis import FrameDamageAnalyzer
+from core.frame_catalog import catalog_page, filter_frame_indices
 from core.jobs import JobManager, JobState
 from core.model_registry import ModelRegistry
 from core.paths import default_models_dir, resource_root
@@ -57,6 +57,7 @@ from gui.dialogs.camera_segments_dialog import CameraSegmentsDialog
 from gui.dialogs.clean_plate_dialog import CleanPlateDialog
 from gui.dialogs.damage_analysis_dialog import DamageAnalysisDialog
 from gui.dialogs.extraction_dialog import ExtractionDialog
+from gui.dialogs.frame_review_panel import FrameReviewPanel
 from gui.dialogs.import_video_dialog import ImportModeDialog, ImportVideoDialog
 from gui.dialogs.export_dialog import ExportDialog
 from gui.dialogs.ffmpeg_config import FFmpegConfigDialog
@@ -84,8 +85,8 @@ class EditorScreen:
         "dust": "#f97316",
         "scratch": "#ef4444",
         "stain": "#a855f7",
-        "missing": "#111827",
-        "perforation": "#f97316",
+        "missing": "#38bdf8",
+        "perforation": "#ec4899",
         "approved": "#22c55e",
     }
 
@@ -207,6 +208,13 @@ class EditorScreen:
         self._frame_review_direction = 1
         self._frame_review_job = None
         self._frame_review_next_due = None
+        self._frame_review_panel = None
+        self._frame_catalog_mode = "thumbnails"
+        self._frame_catalog_page = 0
+        self._frame_catalog_indices = []
+        self._frame_catalog_images = []
+        self._frame_catalog_map = {}
+        self._frame_catalog_refresh_job = None
         self.undo_stack = []
         self.redo_stack = []
         self._play_pulse_job = None
@@ -304,6 +312,25 @@ class EditorScreen:
         edit_menu.add_command(label="Undo", command=self.undo_action)
         edit_menu.add_command(label="Redo", command=self.redo_action)
         edit_menu.add_separator()
+        frame_state_menu = tk.Menu(edit_menu, tearoff=0)
+        frame_state_menu.add_command(
+            label="Sinalizar...    Shift+S",
+            command=self.open_frame_review_panel,
+        )
+        frame_state_menu.add_command(
+            label="Próximo sinalizado",
+            command=lambda: self.go_to_flagged_frame(1),
+        )
+        frame_state_menu.add_command(
+            label="Sinalizado anterior",
+            command=lambda: self.go_to_flagged_frame(-1),
+        )
+        frame_state_menu.add_separator()
+        frame_state_menu.add_command(
+            label="Analisar danos...", command=self.open_damage_analysis
+        )
+        edit_menu.add_cascade(label="Estado do frame", menu=frame_state_menu)
+        edit_menu.add_separator()
         edit_menu.add_command(label="Timeline multipista...", command=self.timeline_controller.open_dialog)
         menubar.add_cascade(label="Editar", menu=edit_menu)
 
@@ -316,7 +343,6 @@ class EditorScreen:
         view_menu.add_command(label="Mostrar máscara manual", command=lambda: self._toggle_var(self.show_mask_var))
         view_menu.add_command(label="Mostrar auto-máscara", command=lambda: self._toggle_var(self.show_auto_mask_var))
         view_menu.add_separator()
-        view_menu.add_command(label="Ocultar/mostrar painel inferior", command=self.toggle_frame_bottom_panel)
         view_menu.add_command(label="Abrir frame em segunda tela", command=self.open_detached_frame_viewer)
         view_menu.add_command(label="Ajustar frame à janela", command=self.reset_frame_view)
         menubar.add_cascade(label="Exibir", menu=view_menu)
@@ -602,6 +628,18 @@ class EditorScreen:
         self.root.bind("<Control-Shift-T>", lambda _event: self.timeline_controller.open_dialog())
         self.root.bind("<Control-Shift-C>", lambda _event: self.collaboration_controller.open_dialog())
         self.root.bind("<Control-Shift-S>", lambda _event: self.color_scopes_controller.open_dialog())
+        self.root.bind(
+            "<Shift-S>",
+            lambda event: self._navigation_shortcut(
+                event, self.open_frame_review_panel
+            ),
+        )
+        self.root.bind(
+            "<Shift-s>",
+            lambda event: self._navigation_shortcut(
+                event, self.open_frame_review_panel
+            ),
+        )
         self.root.bind("<F1>", lambda _event: self.show_help_dialog())
 
     @staticmethod
@@ -735,11 +773,11 @@ class EditorScreen:
         # Left panel - Media browser
         self.create_left_panel(main_container)
 
-        # Center panel - Main workspace
-        self.create_center_panel(main_container)
-
         # Right panel - Properties
         self.create_right_panel(main_container)
+
+        # Center panel - Main workspace
+        self.create_center_panel(main_container)
 
     def create_left_panel(self, parent):
         """Create left media browser panel"""
@@ -751,14 +789,17 @@ class EditorScreen:
         header_frame = DarkTheme.create_custom_frame(left_frame, 'DarkTertiary.TFrame')
         header_frame.pack(fill=tk.X, padx=5, pady=5)
 
-        header_label = tk.Label(
+        self.media_view_btn = tk.Button(
             header_frame,
             text="📂 Mídia",
             font=DarkTheme.FONTS['subtitle'],
             fg=DarkTheme.COLORS['text_primary'],
-            bg=DarkTheme.COLORS['bg_tertiary']
+            bg=DarkTheme.COLORS['bg_tertiary'],
+            relief=tk.FLAT,
+            command=self.show_media_catalog,
+            cursor="hand2",
         )
-        header_label.pack(side=tk.LEFT, padx=10, pady=8)
+        self.media_view_btn.pack(side=tk.LEFT, padx=5, pady=8)
 
         self.import_btn = tk.Button(
             header_frame,
@@ -800,23 +841,25 @@ class EditorScreen:
             padx=8,
             pady=5,
             cursor='hand2',
-            command=self.show_extraction_options,
+            command=self.show_frame_catalog,
         )
         self.frames_btn.pack(side=tk.RIGHT, padx=(0, 2), pady=5)
 
         # Media list
-        media_frame = DarkTheme.create_custom_frame(left_frame, 'DarkSecondary.TFrame')
-        media_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+        self.media_tree_panel = DarkTheme.create_custom_frame(
+            left_frame, 'DarkSecondary.TFrame'
+        )
+        self.media_tree_panel.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
 
         scrollbar = ttk.Scrollbar(
-            media_frame,
+            self.media_tree_panel,
             orient=tk.VERTICAL,
             style='Dark.Vertical.TScrollbar',
         )
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.media_tree = ttk.Treeview(
-            media_frame,
+            self.media_tree_panel,
             show="tree",
             selectmode="browse",
             yscrollcommand=scrollbar.set,
@@ -829,6 +872,160 @@ class EditorScreen:
         self._media_video_items = {}
         self.media_tree.bind('<<TreeviewSelect>>', self.on_media_select)
         self.media_tree.bind('<<TreeviewOpen>>', self._on_media_tree_open)
+        self._create_frame_catalog_panel(left_frame)
+
+    def _create_frame_catalog_panel(self, parent):
+        self.frame_catalog_panel = tk.Frame(
+            parent, bg=DarkTheme.COLORS['bg_secondary']
+        )
+        self.frame_catalog_source_var = tk.StringVar(value="Nenhuma sequência ativa")
+        tk.Label(
+            self.frame_catalog_panel,
+            textvariable=self.frame_catalog_source_var,
+            font=DarkTheme.FONTS['small'],
+            fg=DarkTheme.COLORS['text_primary'],
+            bg=DarkTheme.COLORS['bg_secondary'],
+            wraplength=280,
+            justify=tk.LEFT,
+        ).pack(fill=tk.X, padx=8, pady=(4, 6))
+
+        search_row = tk.Frame(
+            self.frame_catalog_panel, bg=DarkTheme.COLORS['bg_secondary']
+        )
+        search_row.pack(fill=tk.X, padx=6, pady=(0, 5))
+        self.frame_catalog_search_var = tk.StringVar()
+        search_entry = tk.Entry(
+            search_row,
+            textvariable=self.frame_catalog_search_var,
+            bg=DarkTheme.COLORS['bg_primary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            insertbackground=DarkTheme.COLORS['accent_primary'],
+        )
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        search_entry.bind("<Return>", lambda _event: self._refresh_frame_catalog())
+        self._make_compact_button(
+            search_row, "Buscar", self._refresh_frame_catalog
+        ).pack(side=tk.LEFT, padx=(4, 0))
+
+        filter_row = tk.Frame(
+            self.frame_catalog_panel, bg=DarkTheme.COLORS['bg_secondary']
+        )
+        filter_row.pack(fill=tk.X, padx=6, pady=(0, 6))
+        self.frame_catalog_status_var = tk.StringVar(value="Todos os estados")
+        status_values = ["Todos os estados", *self.FRAME_STATUS_LABELS.keys()]
+        self.frame_catalog_status_combo = ttk.Combobox(
+            filter_row,
+            textvariable=self.frame_catalog_status_var,
+            values=status_values,
+            state="readonly",
+            style="Dark.TCombobox",
+        )
+        self.frame_catalog_status_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.frame_catalog_status_combo.bind(
+            "<<ComboboxSelected>>", lambda _event: self._refresh_frame_catalog()
+        )
+        self._make_compact_button(
+            filter_row, "Limpar", self._clear_frame_catalog_filters
+        ).pack(side=tk.LEFT, padx=(4, 0))
+
+        mode_row = tk.Frame(
+            self.frame_catalog_panel, bg=DarkTheme.COLORS['bg_secondary']
+        )
+        mode_row.pack(fill=tk.X, padx=6, pady=(0, 6))
+        self.frame_catalog_list_btn = self._make_compact_button(
+            mode_row,
+            "☰ Lista",
+            lambda: self._set_frame_catalog_mode("list"),
+        )
+        self.frame_catalog_list_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.frame_catalog_thumb_btn = self._make_compact_button(
+            mode_row,
+            "▦ Miniaturas",
+            lambda: self._set_frame_catalog_mode("thumbnails"),
+            accent=True,
+        )
+        self.frame_catalog_thumb_btn.pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0)
+        )
+
+        self.frame_catalog_content = tk.Frame(
+            self.frame_catalog_panel, bg=DarkTheme.COLORS['bg_secondary']
+        )
+        self.frame_catalog_content.pack(fill=tk.BOTH, expand=True, padx=5)
+
+        self.frame_catalog_list_panel = tk.Frame(
+            self.frame_catalog_content, bg=DarkTheme.COLORS['bg_secondary']
+        )
+        list_scroll = ttk.Scrollbar(
+            self.frame_catalog_list_panel,
+            orient=tk.VERTICAL,
+            style='Dark.Vertical.TScrollbar',
+        )
+        list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.frame_catalog_list = ttk.Treeview(
+            self.frame_catalog_list_panel,
+            columns=("frame", "status"),
+            show="headings",
+            selectmode="browse",
+            yscrollcommand=list_scroll.set,
+            style="Dark.Treeview",
+        )
+        self.frame_catalog_list.heading("frame", text="Frame")
+        self.frame_catalog_list.heading("status", text="Estado")
+        self.frame_catalog_list.column("frame", width=95, anchor=tk.W)
+        self.frame_catalog_list.column("status", width=135, anchor=tk.W)
+        self.frame_catalog_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        list_scroll.config(command=self.frame_catalog_list.yview)
+        self.frame_catalog_list.bind(
+            "<<TreeviewSelect>>", self._on_frame_catalog_list_select
+        )
+
+        self.frame_catalog_thumb_panel = tk.Frame(
+            self.frame_catalog_content, bg=DarkTheme.COLORS['bg_secondary']
+        )
+        thumb_scroll = ttk.Scrollbar(
+            self.frame_catalog_thumb_panel,
+            orient=tk.VERTICAL,
+            style='Dark.Vertical.TScrollbar',
+        )
+        thumb_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.frame_catalog_canvas = tk.Canvas(
+            self.frame_catalog_thumb_panel,
+            bg=DarkTheme.COLORS['bg_primary'],
+            highlightthickness=0,
+            yscrollcommand=thumb_scroll.set,
+        )
+        self.frame_catalog_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        thumb_scroll.config(command=self.frame_catalog_canvas.yview)
+        self.frame_catalog_canvas.bind(
+            "<Button-1>", self._on_frame_catalog_thumbnail_click
+        )
+        self.frame_catalog_canvas.bind(
+            "<MouseWheel>", self._on_frame_catalog_mousewheel
+        )
+        self.frame_catalog_canvas.bind(
+            "<Configure>", lambda _event: self._schedule_frame_catalog_refresh(80)
+        )
+
+        pagination = tk.Frame(
+            self.frame_catalog_panel, bg=DarkTheme.COLORS['bg_secondary']
+        )
+        pagination.pack(fill=tk.X, padx=6, pady=6)
+        self._make_compact_button(
+            pagination, "‹", lambda: self._change_frame_catalog_page(-1), width=3
+        ).pack(side=tk.LEFT)
+        self.frame_catalog_page_var = tk.StringVar(value="Página 1/1")
+        tk.Label(
+            pagination,
+            textvariable=self.frame_catalog_page_var,
+            font=DarkTheme.FONTS['small'],
+            fg=DarkTheme.COLORS['text_secondary'],
+            bg=DarkTheme.COLORS['bg_secondary'],
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self._make_compact_button(
+            pagination, "›", lambda: self._change_frame_catalog_page(1), width=3
+        ).pack(side=tk.RIGHT)
+        self.frame_catalog_thumb_panel.pack(fill=tk.BOTH, expand=True)
 
     def create_center_panel(self, parent):
         """Create center main workspace panel"""
@@ -904,11 +1101,19 @@ class EditorScreen:
 
         tools_bar = DarkTheme.create_custom_frame(frame_frame, 'DarkSecondary.TFrame')
         tools_bar.pack(fill=tk.X, padx=10, pady=(10, 4))
+        selection_tools_bar = tk.Frame(
+            tools_bar, bg=DarkTheme.COLORS['bg_secondary']
+        )
+        selection_tools_bar.pack(fill=tk.X)
+        tool_actions_bar = tk.Frame(
+            tools_bar, bg=DarkTheme.COLORS['bg_secondary']
+        )
+        tool_actions_bar.pack(fill=tk.X, pady=(4, 0))
 
         self.frame_tools_buttons = {}
         def make_tool(icon, label, tool_id):
             btn = tk.Button(
-                tools_bar,
+                selection_tools_bar,
                 text=f"{icon}  {label}",
                 font=DarkTheme.FONTS['small'],
                 bg=DarkTheme.COLORS['bg_tertiary'],
@@ -931,7 +1136,7 @@ class EditorScreen:
         make_tool("✚", "Healing", "heal")
 
         tk.Button(
-            tools_bar,
+            tool_actions_bar,
             text="Limpar seleção",
             font=DarkTheme.FONTS['small'],
             bg=DarkTheme.COLORS['bg_tertiary'],
@@ -945,7 +1150,7 @@ class EditorScreen:
         ).pack(side=tk.LEFT, padx=4)
 
         tk.Button(
-            tools_bar,
+            tool_actions_bar,
             text="Seleção → máscara",
             font=DarkTheme.FONTS['small'],
             bg=DarkTheme.COLORS['accent_secondary'],
@@ -959,7 +1164,7 @@ class EditorScreen:
         ).pack(side=tk.LEFT, padx=4)
 
         auto_dust_button = tk.Menubutton(
-            tools_bar,
+            tool_actions_bar,
             text="✦ Auto sujeira ▾",
             font=DarkTheme.FONTS['small'],
             bg=DarkTheme.COLORS['bg_tertiary'],
@@ -995,7 +1200,7 @@ class EditorScreen:
         auto_dust_button.pack(side=tk.LEFT, padx=4)
 
         tk.Button(
-            tools_bar,
+            tool_actions_bar,
             text="▣ Placa limpa",
             font=DarkTheme.FONTS['small'],
             bg=DarkTheme.COLORS['bg_tertiary'],
@@ -1008,7 +1213,9 @@ class EditorScreen:
             command=self.open_clean_plate_dialog,
         ).pack(side=tk.LEFT, padx=4)
 
-        brush_frame = tk.Frame(tools_bar, bg=DarkTheme.COLORS['bg_secondary'])
+        brush_frame = tk.Frame(
+            tool_actions_bar, bg=DarkTheme.COLORS['bg_secondary']
+        )
         brush_frame.pack(side=tk.RIGHT, padx=6)
         tk.Label(
             brush_frame,
@@ -1188,101 +1395,25 @@ class EditorScreen:
             bg=DarkTheme.COLORS['bg_primary'],
         ).pack(anchor=tk.W, padx=12, pady=(0, 6))
 
-        annotation_bar = tk.Frame(
-            self.frame_bottom_panel, bg=DarkTheme.COLORS['bg_secondary']
-        )
-        annotation_bar.pack(fill=tk.X, padx=10, pady=(0, 8))
-        tk.Label(
-            annotation_bar,
-            text="Estado do frame:",
-            font=DarkTheme.FONTS['small'],
-            fg=DarkTheme.COLORS['text_secondary'],
-            bg=DarkTheme.COLORS['bg_secondary'],
-        ).pack(side=tk.LEFT, padx=(8, 6), pady=6)
-        self.frame_status_var = tk.StringVar(value="Sem marcação")
-        self.frame_status_combo = ttk.Combobox(
-            annotation_bar,
-            textvariable=self.frame_status_var,
-            values=list(self.FRAME_STATUS_LABELS),
-            state="readonly",
-            width=24,
-            style="Dark.TCombobox",
-        )
-        self.frame_status_combo.pack(side=tk.LEFT, padx=(0, 6), pady=5)
-        tk.Button(
-            annotation_bar,
-            text="Marcar",
-            command=self.mark_current_frame_status,
-            bg=DarkTheme.COLORS['accent_primary'],
-            fg=DarkTheme.COLORS['text_inverse'],
-            relief=tk.FLAT,
-            padx=10,
-            pady=4,
-        ).pack(side=tk.LEFT, padx=3)
-        tk.Button(
-            annotation_bar,
-            text="Analisar danos...",
-            command=self.open_damage_analysis,
-            bg=DarkTheme.COLORS['accent_secondary'],
-            fg=DarkTheme.COLORS['text_inverse'],
-            relief=tk.FLAT,
-            padx=10,
-            pady=4,
-        ).pack(side=tk.LEFT, padx=3)
-        tk.Button(
-            annotation_bar,
-            text="← Problema anterior",
-            command=lambda: self.go_to_flagged_frame(-1),
-            bg=DarkTheme.COLORS['bg_tertiary'],
-            fg=DarkTheme.COLORS['text_primary'],
-            relief=tk.FLAT,
-            padx=9,
-            pady=4,
-        ).pack(side=tk.RIGHT, padx=3)
-        tk.Button(
-            annotation_bar,
-            text="Próximo problema →",
-            command=lambda: self.go_to_flagged_frame(1),
-            bg=DarkTheme.COLORS['bg_tertiary'],
-            fg=DarkTheme.COLORS['text_primary'],
-            relief=tk.FLAT,
-            padx=9,
-            pady=4,
-        ).pack(side=tk.RIGHT, padx=3)
-        self.frame_bottom_toggle_btn = tk.Button(
-            annotation_bar,
-            text="⌄ Ocultar miniaturas",
-            command=self.toggle_frame_bottom_panel,
-            bg=DarkTheme.COLORS['bg_tertiary'],
-            fg=DarkTheme.COLORS['text_primary'],
-            relief=tk.FLAT,
-            padx=9,
-            pady=4,
-            cursor='hand2',
-        )
-        self.frame_bottom_toggle_btn.pack(side=tk.RIGHT, padx=3)
         self.range_summary_var = tk.StringVar(value="Intervalo: todos os frames")
-        tk.Label(
-            annotation_bar,
-            textvariable=self.range_summary_var,
-            font=DarkTheme.FONTS['small'],
-            fg=DarkTheme.COLORS['text_muted'],
-            bg=DarkTheme.COLORS['bg_secondary'],
-        ).pack(side=tk.RIGHT, padx=12)
 
         work_range_bar = tk.Frame(
             self.frame_bottom_panel, bg=DarkTheme.COLORS['bg_secondary']
         )
         work_range_bar.pack(fill=tk.X, padx=10, pady=(0, 8))
+        range_controls = tk.Frame(
+            work_range_bar, bg=DarkTheme.COLORS['bg_secondary']
+        )
+        range_controls.pack(fill=tk.X)
         tk.Label(
-            work_range_bar,
+            range_controls,
             text="Trecho de trabalho:",
             font=DarkTheme.FONTS['small'],
             fg=DarkTheme.COLORS['text_primary'],
             bg=DarkTheme.COLORS['bg_secondary'],
         ).pack(side=tk.LEFT, padx=(8, 5), pady=6)
         self.timeline_range_start_entry = tk.Entry(
-            work_range_bar,
+            range_controls,
             width=7,
             textvariable=self.range_start_var,
             bg=DarkTheme.COLORS['bg_primary'],
@@ -1291,14 +1422,14 @@ class EditorScreen:
         )
         self.timeline_range_start_entry.pack(side=tk.LEFT, padx=2, pady=5)
         tk.Label(
-            work_range_bar,
+            range_controls,
             text="até",
             font=DarkTheme.FONTS['small'],
             fg=DarkTheme.COLORS['text_secondary'],
             bg=DarkTheme.COLORS['bg_secondary'],
         ).pack(side=tk.LEFT, padx=3)
         self.timeline_range_end_entry = tk.Entry(
-            work_range_bar,
+            range_controls,
             width=7,
             textvariable=self.range_end_var,
             bg=DarkTheme.COLORS['bg_primary'],
@@ -1313,22 +1444,28 @@ class EditorScreen:
             entry.bind("<Return>", lambda _event: self._commit_work_range())
             entry.bind("<FocusOut>", lambda _event: self._update_range_summary())
         self._make_compact_button(
-            work_range_bar, "I = atual", self._set_range_start
+            range_controls, "I = atual", self._set_range_start
         ).pack(side=tk.LEFT, padx=3)
         self._make_compact_button(
-            work_range_bar, "O = atual", self._set_range_end
+            range_controls, "O = atual", self._set_range_end
         ).pack(side=tk.LEFT, padx=3)
         self._make_compact_button(
-            work_range_bar, "Aplicar trecho", self._commit_work_range
+            range_controls,
+            "🎥 Posicionamentos...",
+            self.open_camera_segments_dialog,
         ).pack(side=tk.LEFT, padx=3)
-        self._make_compact_button(
-            work_range_bar, "🎥 Cenas/câmeras...", self.open_camera_segments_dialog
-        ).pack(side=tk.LEFT, padx=3)
+        tk.Label(
+            range_controls,
+            textvariable=self.range_summary_var,
+            font=DarkTheme.FONTS['small'],
+            fg=DarkTheme.COLORS['text_muted'],
+            bg=DarkTheme.COLORS['bg_secondary'],
+        ).pack(side=tk.LEFT, padx=10)
 
         review_controls = tk.Frame(
             work_range_bar, bg=DarkTheme.COLORS['bg_secondary']
         )
-        review_controls.pack(side=tk.RIGHT, padx=(8, 4))
+        review_controls.pack(fill=tk.X, padx=4, pady=(3, 0))
         tk.Label(
             review_controls,
             text="Revisão sem áudio:",
@@ -1411,7 +1548,6 @@ class EditorScreen:
         self.filmstrip_panel = tk.Frame(
             self.frame_collapsible_panel, bg=DarkTheme.COLORS['bg_primary']
         )
-        self.filmstrip_panel.pack(fill=tk.X)
 
         # Filmstrip thumbnails
         self.filmstrip_canvas = tk.Canvas(
@@ -2898,6 +3034,7 @@ class EditorScreen:
             self.notebook.select(1)
         except Exception:
             pass
+        self.show_frame_catalog()
 
     def show_help_dialog(self):
         messagebox.showinfo(
@@ -2907,13 +3044,344 @@ class EditorScreen:
             "2) Editar frames e mascaras\n"
             "3) Restaurar intervalo (ou aplicar filtro)\n"
             "4) Renderizar video restaurado\n\n"
-            "Atalhos: Left/Right = frame anterior/proximo, I/O = marcar intervalo.\n"
+            "Atalhos: Left/Right = frame anterior/proximo, I/O = marcar intervalo, "
+            "Shift+S = sinalizar frame.\n"
             "Ctrl+Scroll = zoom no ponto do cursor; botão direito + arrasto = mover frame.\n"
-            "Scroll = tamanho do brush; miniaturas = clique para navegar.\n"
-            "Use Ocultar painel inferior para ampliar a área ou Segunda tela para outro monitor."
+            "Scroll = tamanho do brush; use Frames no painel lateral para navegar.\n"
+            "A lista lateral alterna entre lista e miniaturas, com busca e filtros.\n"
+            "Use Segunda tela para analisar o frame em outro monitor."
         )
 
     # Media management
+    def show_media_catalog(self):
+        if not hasattr(self, "media_tree_panel"):
+            return
+        self.frame_catalog_panel.pack_forget()
+        self.media_tree_panel.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+        self.media_view_btn.config(bg=DarkTheme.COLORS['accent_primary'])
+        self.frames_btn.config(bg=DarkTheme.COLORS['bg_tertiary'])
+
+    def show_frame_catalog(self):
+        video_name = self.current_video or self._selected_media_video()
+        if not video_name:
+            videos = self.project_manager.get_project_videos()
+            video_name = videos[0] if videos else None
+        if not video_name:
+            messagebox.showinfo(
+                "Frames", "Importe uma mídia e extraia os frames primeiro."
+            )
+            return
+        if self.current_video != video_name:
+            self.load_video(video_name)
+        else:
+            self._activate_video_frames(video_name)
+        if not self.frame_manager.frames:
+            self.show_extraction_options()
+            return
+        self.media_tree_panel.pack_forget()
+        self.frame_catalog_panel.pack(
+            fill=tk.BOTH, expand=True, padx=5, pady=(0, 5)
+        )
+        self.media_view_btn.config(bg=DarkTheme.COLORS['bg_tertiary'])
+        self.frames_btn.config(bg=DarkTheme.COLORS['accent_primary'])
+        self.frame_catalog_source_var.set(
+            f"Frames de {video_name}"
+        )
+        self._refresh_frame_catalog(ensure_current=True)
+
+    def _clear_frame_catalog_filters(self):
+        self.frame_catalog_search_var.set("")
+        self.frame_catalog_status_var.set("Todos os estados")
+        self._frame_catalog_page = 0
+        self._refresh_frame_catalog(ensure_current=True)
+
+    def _set_frame_catalog_mode(self, mode):
+        self._frame_catalog_mode = "list" if mode == "list" else "thumbnails"
+        self.frame_catalog_list_panel.pack_forget()
+        self.frame_catalog_thumb_panel.pack_forget()
+        if self._frame_catalog_mode == "list":
+            self.frame_catalog_list_panel.pack(fill=tk.BOTH, expand=True)
+            self.frame_catalog_list_btn.config(
+                bg=DarkTheme.COLORS['accent_primary'],
+                fg=DarkTheme.COLORS['text_inverse'],
+            )
+            self.frame_catalog_thumb_btn.config(
+                bg=DarkTheme.COLORS['bg_tertiary'],
+                fg=DarkTheme.COLORS['text_primary'],
+            )
+        else:
+            self.frame_catalog_thumb_panel.pack(fill=tk.BOTH, expand=True)
+            self.frame_catalog_thumb_btn.config(
+                bg=DarkTheme.COLORS['accent_primary'],
+                fg=DarkTheme.COLORS['text_inverse'],
+            )
+            self.frame_catalog_list_btn.config(
+                bg=DarkTheme.COLORS['bg_tertiary'],
+                fg=DarkTheme.COLORS['text_primary'],
+            )
+        self._frame_catalog_page = 0
+        self._refresh_frame_catalog(ensure_current=True)
+
+    def _frame_catalog_status_key(self):
+        label = self.frame_catalog_status_var.get()
+        if label == "Todos os estados":
+            return None
+        return self.FRAME_STATUS_LABELS.get(label)
+
+    def _frame_status_label(self, frame_index):
+        record = self.workspace.get_frame_status(frame_index) if self.workspace else None
+        status_key = record.get("status") if record else "unmarked"
+        label = next(
+            (
+                candidate
+                for candidate, value in self.FRAME_STATUS_LABELS.items()
+                if value == status_key
+            ),
+            "Sem marcação",
+        )
+        return status_key, label, record or {}
+
+    def _refresh_frame_catalog(self, ensure_current=False):
+        if not self.frame_manager or not self.frame_manager.frames:
+            return
+        statuses = self.workspace.get_frame_statuses() if self.workspace else {}
+        indices = filter_frame_indices(
+            list(self.frame_manager.frames),
+            statuses,
+            query=self.frame_catalog_search_var.get(),
+            status_filter=self._frame_catalog_status_key(),
+        )
+        page_size = 100 if self._frame_catalog_mode == "list" else 40
+        if ensure_current and self.frame_manager.current_frame_index in indices:
+            position = indices.index(self.frame_manager.current_frame_index)
+            self._frame_catalog_page = position // page_size
+        page = catalog_page(indices, self._frame_catalog_page, page_size)
+        self._frame_catalog_page = page.number
+        self._frame_catalog_indices = list(page.indices)
+        self.frame_catalog_page_var.set(
+            f"Página {page.number + 1}/{page.total_pages} • {page.total_matches} frames"
+        )
+        if self._frame_catalog_mode == "list":
+            self._render_frame_catalog_list()
+        else:
+            self._render_frame_catalog_thumbnails()
+
+    def _render_frame_catalog_list(self):
+        for item in self.frame_catalog_list.get_children(""):
+            self.frame_catalog_list.delete(item)
+        for status, color in self.FRAME_STATUS_COLORS.items():
+            self.frame_catalog_list.tag_configure(status, foreground=color)
+        for frame_index in self._frame_catalog_indices:
+            status_key, label, _record = self._frame_status_label(frame_index)
+            warning = "⚠ " if status_key not in {"unmarked", "approved"} else ""
+            self.frame_catalog_list.insert(
+                "",
+                tk.END,
+                iid=f"frame-{frame_index}",
+                values=(f"{warning}{frame_index + 1}", label),
+                tags=(status_key,),
+            )
+        self._sync_frame_catalog_current()
+
+    def _render_frame_catalog_thumbnails(self):
+        canvas = self.frame_catalog_canvas
+        canvas.delete("all")
+        self._frame_catalog_images = []
+        self._frame_catalog_map = {}
+        width = max(250, canvas.winfo_width())
+        gap = 8
+        columns = 2 if width >= 250 else 1
+        card_width = max(105, int((width - gap * (columns + 1)) / columns))
+        thumb_height = max(58, int(card_width * 0.58))
+        card_height = thumb_height + 34
+        for position, frame_index in enumerate(self._frame_catalog_indices):
+            row, column = divmod(position, columns)
+            x = gap + column * (card_width + gap)
+            y = gap + row * (card_height + gap)
+            path = os.path.join(
+                self.frame_manager.frames_dir,
+                self.frame_manager.frames[frame_index],
+            )
+            result = self._get_filmstrip_thumb(path, thumb_height)
+            status_key, label, _record = self._frame_status_label(frame_index)
+            color = self.FRAME_STATUS_COLORS.get(
+                status_key, DarkTheme.COLORS['border_light']
+            )
+            border = canvas.create_rectangle(
+                x,
+                y,
+                x + card_width,
+                y + card_height,
+                fill=DarkTheme.COLORS['bg_tertiary'],
+                outline=color,
+                width=3 if status_key != "unmarked" else 1,
+            )
+            self._frame_catalog_map[border] = frame_index
+            if result:
+                photo, thumb_width = result
+                self._frame_catalog_images.append(photo)
+                image_x = x + (card_width - min(card_width, thumb_width)) / 2
+                image_item = canvas.create_image(
+                    image_x,
+                    y + 2,
+                    anchor=tk.NW,
+                    image=photo,
+                )
+                self._frame_catalog_map[image_item] = frame_index
+            if status_key not in {"unmarked", "approved"}:
+                badge = canvas.create_text(
+                    x + 10,
+                    y + 10,
+                    text="⚠",
+                    fill=color,
+                    anchor=tk.CENTER,
+                    font=("Segoe UI Symbol", 13, "bold"),
+                )
+                self._frame_catalog_map[badge] = frame_index
+            number_item = canvas.create_text(
+                x + 6,
+                y + thumb_height + 8,
+                text=f"Frame {frame_index + 1}",
+                fill=DarkTheme.COLORS['text_primary'],
+                anchor=tk.NW,
+                font=DarkTheme.FONTS['small'],
+            )
+            self._frame_catalog_map[number_item] = frame_index
+            if status_key != "unmarked":
+                status_item = canvas.create_text(
+                    x + card_width - 6,
+                    y + thumb_height + 8,
+                    text=label,
+                    fill=color,
+                    anchor=tk.NE,
+                    font=("Segoe UI", 8, "bold"),
+                )
+                self._frame_catalog_map[status_item] = frame_index
+        canvas.configure(scrollregion=canvas.bbox("all"))
+        self._sync_frame_catalog_current()
+
+    def _sync_frame_catalog_current(self):
+        if not hasattr(self, "frame_catalog_panel"):
+            return
+        current = self.frame_manager.current_frame_index if self.frame_manager else -1
+        if current not in self._frame_catalog_indices:
+            statuses = self.workspace.get_frame_statuses() if self.workspace else {}
+            matching = filter_frame_indices(
+                list(self.frame_manager.frames),
+                statuses,
+                query=self.frame_catalog_search_var.get(),
+                status_filter=self._frame_catalog_status_key(),
+            )
+            if current in matching:
+                self._refresh_frame_catalog(ensure_current=True)
+                return
+        if self._frame_catalog_mode == "list":
+            item = f"frame-{current}"
+            if self.frame_catalog_list.exists(item):
+                self.frame_catalog_list.selection_set(item)
+                self.frame_catalog_list.focus(item)
+                self.frame_catalog_list.see(item)
+            return
+        self.frame_catalog_canvas.delete("current-frame")
+        matching_items = [
+            item for item, index in self._frame_catalog_map.items() if index == current
+        ]
+        if not matching_items:
+            return
+        boxes = [self.frame_catalog_canvas.bbox(item) for item in matching_items]
+        boxes = [box for box in boxes if box]
+        if not boxes:
+            return
+        left = min(box[0] for box in boxes)
+        top = min(box[1] for box in boxes)
+        right = max(box[2] for box in boxes)
+        bottom = max(box[3] for box in boxes)
+        self.frame_catalog_canvas.create_rectangle(
+            left - 2,
+            top - 2,
+            right + 2,
+            bottom + 2,
+            outline=DarkTheme.COLORS['accent_primary'],
+            width=3,
+            tags="current-frame",
+        )
+        try:
+            region = self.frame_catalog_canvas.bbox("all")
+            viewport = max(1, self.frame_catalog_canvas.winfo_height())
+            outside_view = region and (
+                top < self.frame_catalog_canvas.canvasy(0)
+                or bottom > self.frame_catalog_canvas.canvasy(viewport)
+            )
+            if outside_view:
+                target = max(
+                    0.0,
+                    (top - viewport * 0.35) / max(1, region[3] - region[1]),
+                )
+                self.frame_catalog_canvas.yview_moveto(min(1.0, target))
+        except tk.TclError:
+            pass
+
+    def _activate_frame_catalog_index(self, frame_index):
+        self.stop_frame_review(silent=True)
+        if self.frame_manager.go_to_frame(frame_index):
+            self.notebook.select(1)
+            self.show_current_frame()
+            self.update_frame_counter()
+
+    def _on_frame_catalog_list_select(self, _event=None):
+        selection = self.frame_catalog_list.selection()
+        if not selection:
+            return
+        try:
+            frame_index = int(selection[0].split("-", 1)[1])
+        except (IndexError, ValueError):
+            return
+        if frame_index != self.frame_manager.current_frame_index:
+            self._activate_frame_catalog_index(frame_index)
+
+    def _on_frame_catalog_thumbnail_click(self, event):
+        x = self.frame_catalog_canvas.canvasx(event.x)
+        y = self.frame_catalog_canvas.canvasy(event.y)
+        items = self.frame_catalog_canvas.find_overlapping(x - 2, y - 2, x + 2, y + 2)
+        frame_index = next(
+            (
+                self._frame_catalog_map[item]
+                for item in reversed(items)
+                if item in self._frame_catalog_map
+            ),
+            None,
+        )
+        if frame_index is not None:
+            self._activate_frame_catalog_index(frame_index)
+
+    def _on_frame_catalog_mousewheel(self, event):
+        self.frame_catalog_canvas.yview_scroll(
+            int(-1 * (event.delta / 120)), "units"
+        )
+        return "break"
+
+    def _change_frame_catalog_page(self, delta):
+        self._frame_catalog_page = max(0, self._frame_catalog_page + int(delta))
+        self._refresh_frame_catalog()
+
+    def _schedule_frame_catalog_refresh(self, delay=80):
+        if self._frame_catalog_refresh_job is not None:
+            try:
+                self.root.after_cancel(self._frame_catalog_refresh_job)
+            except Exception:
+                pass
+        self._frame_catalog_refresh_job = self.root.after(
+            delay, self._run_frame_catalog_refresh
+        )
+
+    def _run_frame_catalog_refresh(self):
+        self._frame_catalog_refresh_job = None
+        try:
+            if self.frame_catalog_panel.winfo_ismapped():
+                self._refresh_frame_catalog()
+        except tk.TclError:
+            pass
+
     def load_project_videos(self):
         try:
             videos = self.project_manager.get_project_videos()
@@ -4315,18 +4783,7 @@ class EditorScreen:
         self._schedule_frame_redraw(0)
 
     def toggle_frame_bottom_panel(self):
-        if not hasattr(self, "frame_collapsible_panel"):
-            return
-        if self._frame_bottom_visible:
-            self.frame_collapsible_panel.pack_forget()
-            self._frame_bottom_visible = False
-            self.frame_bottom_toggle_btn.config(text="⌃ Mostrar miniaturas")
-            self.status_var.set("Miniaturas ocultas — mais espaço para restauração")
-        else:
-            self.frame_collapsible_panel.pack(fill=tk.X)
-            self._frame_bottom_visible = True
-            self.frame_bottom_toggle_btn.config(text="⌄ Ocultar miniaturas")
-        self.root.after_idle(self._run_frame_redraw)
+        self.show_frame_catalog()
 
     def open_detached_frame_viewer(self):
         if self._detached_viewer is not None:
@@ -4619,11 +5076,9 @@ class EditorScreen:
                     pass
                 self._sync_current_frame_status(info["index"])
                 self._update_range_summary()
-                self._update_filmstrip(info['index'])
+                self._sync_frame_catalog_current()
 
     def _sync_current_frame_status(self, frame_index):
-        if not hasattr(self, "frame_status_var"):
-            return
         status = self.workspace.get_frame_status(frame_index) if self.workspace else None
         status_key = status.get("status") if status else "unmarked"
         label = next(
@@ -4634,29 +5089,66 @@ class EditorScreen:
             ),
             "Sem marcação",
         )
-        self.frame_status_var.set(label)
+        panel = self._frame_review_panel
+        if panel is not None:
+            try:
+                panel.update_frame(
+                    frame_index + 1,
+                    label,
+                    status.get("note", "") if status else "",
+                )
+            except tk.TclError:
+                self._frame_review_panel = None
 
-    def mark_current_frame_status(self):
+    def open_frame_review_panel(self):
+        if not self.frame_manager or not self.frame_manager.frames:
+            messagebox.showinfo(
+                "Estado do frame", "Extraia ou carregue frames primeiro."
+            )
+            return
+        try:
+            alive = (
+                self._frame_review_panel is not None
+                and self._frame_review_panel.window.winfo_exists()
+            )
+        except tk.TclError:
+            alive = False
+        if not alive:
+            self._frame_review_panel = FrameReviewPanel(
+                self.root,
+                tuple(self.FRAME_STATUS_LABELS),
+                self._apply_frame_review_status,
+                self.clear_current_frame_status,
+                lambda: self.go_to_flagged_frame(-1),
+                lambda: self.go_to_flagged_frame(1),
+                self.open_damage_analysis,
+            )
+        info = self.frame_manager.get_current_frame_info()
+        if info:
+            self._sync_current_frame_status(info["index"])
+        self._frame_review_panel.show()
+
+    def _apply_frame_review_status(self, label, note=""):
+        self._set_current_frame_status(label, note)
+
+    def _set_current_frame_status(self, label, note=""):
         if not self.workspace or not self.frame_manager:
             return
         info = self.frame_manager.get_current_frame_info()
         if not info:
             return
-        status = self.FRAME_STATUS_LABELS.get(
-            self.frame_status_var.get(), "unmarked"
-        )
-        note = ""
-        if status in {"review", "dust", "scratch", "stain", "missing", "perforation"}:
-            note = simpledialog.askstring(
-                "Observação do frame",
-                "Descreva o problema, se desejar:",
-                parent=self.root,
-            ) or ""
+        status = self.FRAME_STATUS_LABELS.get(label, "unmarked")
         self.workspace.set_frame_status(info["index"], status, note)
-        self.status_var.set(
-            f"Frame {info['index'] + 1}: {self.frame_status_var.get()}"
-        )
-        self._update_filmstrip(info["index"])
+        self.status_var.set(f"Frame {info['index'] + 1}: {label}")
+        self._sync_current_frame_status(info["index"])
+        self._refresh_frame_catalog()
+        self._draw_range_overview()
+
+    def clear_current_frame_status(self):
+        self._set_current_frame_status("Sem marcação", "")
+
+    def mark_current_frame_status(self):
+        self.open_frame_review_panel()
 
     def go_to_flagged_frame(self, direction):
         if not self.workspace or not self.frame_manager:
@@ -4792,8 +5284,9 @@ class EditorScreen:
             return {"analyzed": len(indices), "flagged": flagged}
 
         def analysis_complete(result):
-            self._update_filmstrip(self.frame_manager.current_frame_index)
             self._sync_current_frame_status(self.frame_manager.current_frame_index)
+            self._refresh_frame_catalog()
+            self._draw_range_overview()
             messagebox.showinfo(
                 "Análise concluída",
                 f"Frames analisados: {result['analyzed']}\n"
@@ -4845,10 +5338,9 @@ class EditorScreen:
         self.range_start_var.set(str(start + 1))
         self.range_end_var.set(str(end + 1))
         self._update_range_summary()
-        self._update_filmstrip(self.frame_manager.current_frame_index)
         self.status_var.set(
-            f"Trecho ativo: frames {start + 1}–{end + 1}. "
-            "Use Cenas/câmeras para salvá-lo."
+            f"Trecho ativo automaticamente: frames {start + 1}–{end + 1}. "
+            "Use Posicionamentos para salvá-lo."
         )
         return True
 
@@ -4891,6 +5383,16 @@ class EditorScreen:
                 fill=segment_colors[index % len(segment_colors)],
                 outline="",
             )
+        if self.workspace:
+            for frame_index, value in self.workspace.get_frame_statuses().items():
+                if not 0 <= frame_index < total:
+                    continue
+                color = self.FRAME_STATUS_COLORS.get(value.get("status"))
+                if color:
+                    marker_x = position(frame_index)
+                    canvas.create_line(
+                        marker_x, 2, marker_x, 5, fill=color, width=2
+                    )
         bounds = self._current_work_range()
         if bounds is not None:
             start, end = bounds
@@ -5217,6 +5719,22 @@ class EditorScreen:
                         img = Image.open(cache_path).convert("RGB")
                 except Exception:
                     img = None
+            if img is None and cache_path:
+                cached_variant = self._find_cached_thumbnail_variant(
+                    source_id, os.path.basename(path), src_mtime
+                )
+                if cached_variant:
+                    try:
+                        img = Image.open(cached_variant).convert("RGB")
+                        if img.height != thumb_h:
+                            target_width = max(
+                                1, int(img.width * thumb_h / max(1, img.height))
+                            )
+                            img = img.resize(
+                                (target_width, thumb_h), Image.Resampling.LANCZOS
+                            )
+                    except Exception:
+                        img = None
             if img is None:
                 self._queue_filmstrip_thumbnail(
                     path, thumb_h, src_mtime, cache_path
@@ -5249,6 +5767,25 @@ class EditorScreen:
             return photo, thumb_w
         except Exception:
             return None
+
+    def _find_cached_thumbnail_variant(self, source_id, filename, src_mtime):
+        root = getattr(self, "thumb_cache_root", None)
+        if not root or not os.path.isdir(root):
+            return None
+        pattern = f"{source_id}-{filename}.jpg"
+        try:
+            for directory in os.scandir(root):
+                if not directory.is_dir():
+                    continue
+                candidate = os.path.join(directory.path, pattern)
+                if (
+                    os.path.isfile(candidate)
+                    and os.path.getmtime(candidate) >= src_mtime
+                ):
+                    return candidate
+        except OSError:
+            return None
+        return None
 
     def _queue_filmstrip_thumbnail(self, path, thumb_h, src_mtime, cache_path):
         if not cache_path:
@@ -5302,7 +5839,7 @@ class EditorScreen:
             refreshed = True
         if refreshed:
             self._filmstrip_signature = None
-            self._schedule_filmstrip_update(20)
+            self._schedule_frame_catalog_refresh(20)
         try:
             self._thumb_ready_job = self.root.after(50, self._drain_thumb_ready)
         except tk.TclError:
@@ -5374,7 +5911,6 @@ class EditorScreen:
         if info:
             self.range_start_var.set(str(info['index'] + 1))
             self._update_range_summary()
-            self._update_filmstrip(info['index'])
 
     def _set_range_end(self):
         if not self.frame_manager:
@@ -5383,7 +5919,6 @@ class EditorScreen:
         if info:
             self.range_end_var.set(str(info['index'] + 1))
             self._update_range_summary()
-            self._update_filmstrip(info['index'])
 
     def _set_frame_tool(self, tool_id):
         self.selected_tool = tool_id
@@ -5561,6 +6096,7 @@ class EditorScreen:
         def detection_task(context):
             return detect_camera_segments(
                 paths,
+                threshold=dialog.detection_threshold(),
                 progress_callback=lambda value: context.report(
                     value, f"Comparando posições de câmera — {value:.0f}%"
                 ),
@@ -5592,17 +6128,20 @@ class EditorScreen:
                 dialog.set_detecting(False)
             except tk.TclError:
                 pass
-            self.status_var.set(f"{len(segments)} cenas/câmeras detectadas")
+            self.status_var.set(f"{len(segments)} posicionamentos detectados")
 
         def detection_error(error):
             try:
                 dialog.set_detecting(False)
             except tk.TclError:
                 pass
-            messagebox.showerror("Detecção de câmeras", error)
+            messagebox.showerror("Detecção de posicionamentos", error)
 
         self._start_ui_job(
-            "Detecção de cenas", detection_task, detection_complete, detection_error
+            "Detecção de posicionamentos",
+            detection_task,
+            detection_complete,
+            detection_error,
         )
 
     def _add_camera_segment(self, name, start, end, dialog):
@@ -7598,10 +8137,11 @@ class EditorScreen:
             self.notebook.select(1)
             self.show_current_frame()
             self.update_frame_counter()
+            self.show_frame_catalog()
             messagebox.showinfo(
                 "Frames prontos",
                 f"{self.total_frames} frames foram extraídos sem perda.\n\n"
-                "Eles agora aparecem em páginas na árvore de mídia.",
+                "Eles agora aparecem no catálogo lateral, em lista ou miniaturas.",
             )
 
         def extract_failed(error):

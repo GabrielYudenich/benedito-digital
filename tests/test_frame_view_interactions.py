@@ -175,7 +175,7 @@ def test_thumbnail_zoom_uses_discrete_buttons_and_clear_percentage():
     assert updates == [20, 20]
 
 
-def test_work_range_accepts_explicit_camera_interval():
+def test_work_range_is_active_without_refreshing_hidden_filmstrip():
     screen = object.__new__(EditorScreen)
     screen.frame_manager = FakeFrameManager(1000, current=60)
     screen.range_start_var = FakeVariable("61")
@@ -183,13 +183,36 @@ def test_work_range_accepts_explicit_camera_interval():
     screen.range_summary_var = FakeVariable("")
     screen.status_var = FakeVariable("")
     screen._draw_range_overview = lambda: None
-    updates = []
-    screen._update_filmstrip = updates.append
-
     assert screen._commit_work_range() is True
     assert screen._current_work_range() == (60, 816)
     assert "61–817" in screen.range_summary_var.get()
-    assert updates == [60]
+    assert "automaticamente" in screen.status_var.get()
+
+
+def test_review_panel_status_updates_catalog_and_timeline():
+    stored = {}
+    workspace = SimpleNamespace(
+        set_frame_status=lambda frame, status, note: stored.update(
+            {frame: {"status": status, "note": note}}
+        ),
+        get_frame_status=lambda frame: stored.get(frame),
+    )
+    screen = object.__new__(EditorScreen)
+    screen.workspace = workspace
+    screen.frame_manager = SimpleNamespace(
+        get_current_frame_info=lambda: {"index": 12}
+    )
+    screen.status_var = FakeVariable("")
+    screen._frame_review_panel = None
+    updates = []
+    screen._refresh_frame_catalog = lambda: updates.append("catalog")
+    screen._draw_range_overview = lambda: updates.append("timeline")
+
+    screen._set_current_frame_status("Risco", "Risco vertical")
+
+    assert stored[12] == {"status": "scratch", "note": "Risco vertical"}
+    assert updates == ["catalog", "timeline"]
+    assert "Frame 13: Risco" == screen.status_var.get()
 
 
 def test_frame_review_plays_selected_range_without_audio_controls():

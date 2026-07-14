@@ -1,4 +1,4 @@
-"""GUI for reusable camera/shot frame ranges."""
+"""GUI for reusable camera-position frame ranges."""
 
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
@@ -26,7 +26,7 @@ class CameraSegmentsDialog:
         self.current_range = current_range
         self.segments = []
         self.window = tk.Toplevel(parent)
-        self.window.title("Cenas e posições de câmera")
+        self.window.title("Posicionamentos de câmera")
         self.window.geometry("760x560")
         self.window.minsize(620, 430)
         self.window.transient(parent)
@@ -34,7 +34,7 @@ class CameraSegmentsDialog:
 
         tk.Label(
             self.window,
-            text="Separar por cena ou posição de câmera",
+            text="Separar por posicionamento de câmera",
             font=("Segoe UI", 20, "bold"),
             fg="#f5f3f7",
             bg="#17131f",
@@ -42,7 +42,7 @@ class CameraSegmentsDialog:
         tk.Label(
             self.window,
             text=(
-                "Cada segmento reutiliza o mesmo intervalo nas ferramentas de estabilização, "
+                "Cada posicionamento reutiliza o mesmo intervalo nas ferramentas de estabilização, "
                 "limpeza, restauração e placa limpa. A detecção automática sugere cortes; "
                 "você continua no controle."
             ),
@@ -61,7 +61,7 @@ class CameraSegmentsDialog:
             show="tree headings",
             style="Dark.Treeview",
         )
-        self.tree.heading("#0", text="Cena / câmera")
+        self.tree.heading("#0", text="Posicionamento")
         self.tree.heading("start", text="Início")
         self.tree.heading("end", text="Final")
         self.tree.heading("length", text="Frames")
@@ -74,11 +74,27 @@ class CameraSegmentsDialog:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 8), pady=8)
         self.tree.bind("<Double-1>", lambda _event: self._apply())
 
-        buttons = tk.Frame(self.window, bg="#17131f")
-        buttons.pack(fill=tk.X, padx=24, pady=18)
+        detection_options = tk.Frame(self.window, bg="#17131f")
+        detection_options.pack(fill=tk.X, padx=24, pady=(16, 6))
+        self.sensitivity_var = tk.StringVar(value="Detalhada")
+        tk.Label(
+            detection_options,
+            text="Sensibilidade:",
+            font=("Segoe UI", 9),
+            fg="#b8afc4",
+            bg="#17131f",
+        ).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Combobox(
+            detection_options,
+            textvariable=self.sensitivity_var,
+            values=("Detalhada", "Equilibrada", "Conservadora"),
+            state="readonly",
+            width=13,
+            style="Dark.TCombobox",
+        ).pack(side=tk.LEFT, padx=(0, 8))
         self.detect_button = tk.Button(
-            buttons,
-            text="Detectar câmeras automaticamente",
+            detection_options,
+            text="Detectar posicionamentos",
             command=lambda: self.detect_callback(self),
             bg="#a855f7",
             fg="#0b0712",
@@ -87,6 +103,9 @@ class CameraSegmentsDialog:
             pady=8,
         )
         self.detect_button.pack(side=tk.LEFT)
+
+        buttons = tk.Frame(self.window, bg="#17131f")
+        buttons.pack(fill=tk.X, padx=24, pady=(0, 16))
         tk.Button(
             buttons,
             text=f"Salvar intervalo {current_range[0]}–{current_range[1]}",
@@ -129,7 +148,7 @@ class CameraSegmentsDialog:
         ).pack(side=tk.LEFT, padx=(0, 10))
         tk.Button(
             segment_actions,
-            text="Estabilizar câmera",
+            text="Estabilizar posicionamento",
             command=self._stabilize,
             bg="#352a45",
             fg="white",
@@ -169,19 +188,32 @@ class CameraSegmentsDialog:
     def set_detecting(self, active):
         self.detect_button.config(
             state=tk.DISABLED if active else tk.NORMAL,
-            text="Detectando..." if active else "Detectar câmeras automaticamente",
+            text="Detectando..." if active else "Detectar posicionamentos",
         )
+
+    def detection_threshold(self):
+        return {
+            "Detalhada": 0.105,
+            "Equilibrada": 0.16,
+            "Conservadora": 0.24,
+        }.get(self.sensitivity_var.get(), 0.16)
 
     def _selected(self):
         selection = self.tree.selection()
         if not selection:
-            messagebox.showinfo("Escolha uma cena", "Selecione uma cena ou câmera primeiro.", parent=self.window)
+            messagebox.showinfo(
+                "Escolha um posicionamento",
+                "Selecione um posicionamento primeiro.",
+                parent=self.window,
+            )
             return None
         return next((item for item in self.segments if item.id == selection[0]), None)
 
     def _add(self):
         name = simpledialog.askstring(
-            "Nome da cena", "Nome ou posição da câmera:", parent=self.window
+            "Nome do posicionamento",
+            "Nome do posicionamento de câmera:",
+            parent=self.window,
         )
         if name:
             self.add_callback(name, self.current_range[0], self.current_range[1], self)
