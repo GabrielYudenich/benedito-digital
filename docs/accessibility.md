@@ -8,6 +8,10 @@ remover uma combinação deixando o campo vazio e restaurar os padrões. Conflit
 rejeitados antes de salvar. As preferências ficam em `%LOCALAPPDATA%\Benedito Digital\shortcuts.json`
 no Windows e não alteram nem são compartilhadas com o projeto.
 
+Caps Lock e Num Lock são ignorados ao comparar atalhos. Assim, letras como `I`, `O` e
+`Shift+S` funcionam da mesma maneira independentemente do estado dessas teclas, sem afetar
+a digitação dentro de campos de texto.
+
 Controles interativos participam da navegação por `Tab` e `Shift+Tab`. As setas navegam
 frames somente quando o foco não está em um campo de texto, evitando perda de posição ao
 editar números ou nomes.

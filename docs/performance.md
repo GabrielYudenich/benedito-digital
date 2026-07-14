@@ -91,3 +91,12 @@ reutilizada como recorte em todo o segmento, evitando centenas de máscaras repe
 A reprodução da aba Frames é silenciosa e limitada ao trecho ativo. Ela usa o FPS conhecido
 da referência, permite `0.25x`, `0.5x`, `1x`, `2x` e `4x` e pula posições intermediárias se
 a decodificação de PNGs grandes não acompanhar o relógio, mantendo a interface responsiva.
+
+Durante o play, quatro workers preparam antecipadamente até 24 previews em no máximo
+1280×720. Tela principal e segunda tela compartilham o mesmo par Original/Resultado. No
+projeto real de 3.927 PNGs, o benchmark local sustentou 29,0 fps com a comparação aberta
+para uma fonte de 29,97 fps. Ao pausar, o editor volta a carregar o frame na resolução total.
+
+Arquivos lossless grandes continuam podendo exigir proxy no player de referência. Na primeira
+tentativa de reprodução direta de uma fonte acima de 512 MiB, o Benedito oferece criar o proxy.
+Ele serve somente ao preview e nunca entra no render final.

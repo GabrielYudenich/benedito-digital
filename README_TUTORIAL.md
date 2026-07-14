@@ -21,7 +21,10 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 5. Confirme a importação e, se desejar, crie o proxy leve.
 6. Selecione a fonte na árvore e use `▶` para reproduzir. Marque ou desmarque
    `Reproduzir áudio` abaixo do player.
-7. O vídeo e o proxy são referências. A restauração acontece nos frames.
+7. Se o arquivo de preservação for grande e ainda não possuir proxy, o Benedito oferece
+   criar uma cópia leve antes do primeiro play. O original, os frames e o render final
+   não usam nem são alterados pelo proxy.
+8. O vídeo e o proxy são referências. A restauração acontece nos frames.
 
 **3. Extrair frames**
 1. Expanda a fonte em `Mídia > Frames` e clique em `Extrair frames sem perda`, ou use
@@ -42,10 +45,13 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
    `Original`, `Resultado` ou `Comparar`; no último modo, mova o divisor para inspecionar
    as duas versões no mesmo frame. `F11` alterna a tela cheia.
 6. A segunda tela possui frame anterior/seguinte, reprodução, velocidade e áudio em `1x`,
-   além dos contadores de frame interno, tempo do projeto, tempo da fonte e tempo do trecho.
-7. A barra `Navegar por todos os frames` muda o frame atual. O catálogo lateral acompanha
+   além dos contadores centralizados de frame interno, tempo do projeto, tempo da fonte e
+   tempo do trecho.
+7. Ao iniciar a revisão, um buffer curto prepara previews 720p em paralelo. As duas telas
+   reutilizam o mesmo cache em vez de decodificar o PNG duas vezes.
+8. A barra `Navegar por todos os frames` muda o frame atual. O catálogo lateral acompanha
    o frame e troca de página automaticamente quando necessário.
-8. Em `Revisão sem áudio`, escolha de `0.25x` a `4x`. Use `◀` para revisar voltando,
+9. Em `Revisão sem áudio`, escolha de `0.25x` a `4x`. Use `◀` para revisar voltando,
    `■` para pausar e `▶` para avançar pelo trecho de trabalho.
 
 **5. Navegar e editar frames**
@@ -77,19 +83,21 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
    restauração e placa limpa passam a usar esse trecho.
 4. No gerenciador, use `Estabilizar posicionamento` para aplicar estabilização automática
    somente ao intervalo selecionado.
-5. Ao concluir, escolha `Pré-renderizar` no mesmo gerenciador para gerar e abrir um MP4
+5. Antes de iniciar estabilização ou placa limpa, confirme obrigatoriamente se a operação
+   vale para um posicionamento salvo, para o trecho atual ou para o filme inteiro no corte útil.
+6. Ao concluir, escolha `Pré-renderizar` no mesmo gerenciador para gerar e abrir um MP4
    curto do posicionamento estabilizado antes do render final.
-6. Para limitar a placa a uma parte do cenário, escolha `Retângulo` ou `Laço` no frame
+7. Para limitar a placa a uma parte do cenário, escolha `Retângulo` ou `Laço` no frame
    representativo, marque o fundo e depois use `Criar placa limpa`.
-7. Abra `Restauração > Criar placa limpa do trecho` — a função também continua disponível
+8. Abra `Restauração > Criar placa limpa do trecho` — a função também continua disponível
    no botão `Placa limpa` e no gerenciador de posicionamentos.
-8. Ative `Usar a seleção atual como recorte em todo o trecho`. O mesmo recorte será
+9. Ative `Usar a seleção atual como recorte em todo o trecho`. O mesmo recorte será
    reutilizado nos frames do segmento, sem depender de uma seleção separada em cada frame.
-9. O Benedito alinha amostras, calcula um fundo mediano e mede se a câmera realmente
+10. O Benedito alinha amostras, calcula um fundo mediano e mede se a câmera realmente
    permaneceu estática antes de alterar qualquer frame.
-10. A aplicação usa somente sujeiras pequenas no fundo estável. Rostos, braços e outros
+11. A aplicação usa somente sujeiras pequenas no fundo estável. Rostos, braços e outros
    movimentos grandes são protegidos e permanecem no frame original.
-11. Se a câmera se mover além do limite seguro, a placa é preservada para inspeção, mas
+12. Se a câmera se mover além do limite seguro, a placa é preservada para inspeção, mas
    não é aplicada automaticamente. Estabilize ou reduza o segmento e tente novamente.
 
 **7. Restaurar**

@@ -46,6 +46,13 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - propriedades avançadas em janela independente e atalhos configuráveis por usuário;
 - segunda tela com modos original, resultado e comparação, divisor, playback e contadores;
 - opção de incorporar frame e timecodes no render final.
+- playback de frames com quatro workers, buffer curto e cache 720p compartilhado pelas telas;
+- contadores maiores, centralizados e divididos em duas linhas na segunda tela;
+- oferta de proxy antes de reproduzir diretamente arquivos de preservação grandes;
+- escolha obrigatória entre posicionamento, trecho ativo e filme inteiro antes de estabilizar
+  ou criar placa limpa;
+- cancelamento cooperativo da estabilização e limpeza imediata do indicador da barra de status;
+- atalhos independentes de Caps Lock e Num Lock.
 
 ### Alterado
 
