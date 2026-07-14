@@ -21,12 +21,15 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - recuperação automática de JSON e checkpoints após gravação interrompida, com backup e quarentena;
 - importação guiada do filme inteiro ou de trecho lossless FFV1 com intervalo exato;
 - estimativa e preflight de espaço livre para importação e sequências PNG.
+- árvore de mídia por fonte com proxies e frames paginados;
+- player de referência com áudio opcional por FFplay.
 
 ### Alterado
 
 - repositórios completos de modelos foram substituídos por adaptadores mínimos e avisos;
 - projetos grandes passam a usar proxies, chunks, checkpoints e deduplicação;
 - versão interna elevada para `1.1.0` como candidata de pré-lançamento.
+- frames de fontes diferentes passam a usar diretórios separados.
 
 ### Segurança
 

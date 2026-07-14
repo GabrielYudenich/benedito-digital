@@ -13,13 +13,19 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 
 **2. Importar vídeo**
 1. Na aba `Mídia`, clique em `+` e selecione o arquivo.
-2. O vídeo é carregado como referência. A restauração acontece nos frames.
+2. Escolha filme inteiro ou informe início e final do trecho antes da análise.
+3. Revise a importação e, se desejar, crie o proxy leve.
+4. Selecione a fonte na árvore e use `▶` para reproduzir. Marque ou desmarque
+   `Reproduzir áudio` abaixo do player.
+5. O vídeo e o proxy são referências. A restauração acontece nos frames.
 
 **3. Extrair frames**
-1. Vá na aba `Preparação`.
+1. Expanda a fonte em `Mídia > Frames` e clique em `Extrair frames sem perda`, ou use
+   o botão `Frames` no cabeçalho da árvore.
 2. Mantenha `FPS = Original` para preservar a cadência do material.
-3. Clique em `Extrair` e revise duração, resolução e quantidade estimada.
+3. Revise duração, resolução, quantidade estimada e espaço em disco.
 4. Acompanhe porcentagem, etapa e tempo restante na Central de Progresso.
+5. Ao concluir, expanda as páginas de 100 frames na árvore para abrir um quadro específico.
 
 **4. Navegar e editar frames**
 1. Vá para a aba `Frames`.

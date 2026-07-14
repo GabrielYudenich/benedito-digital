@@ -15,6 +15,8 @@ projeto/
 │   └── proxies/
 ├── frames/
 │   └── originals/
+│       └── <fonte-id>/
+│           └── frame_000001.png
 ├── history/
 │   └── operations/
 ├── objects/
@@ -36,7 +38,7 @@ projeto/
 - `history/operations` guarda uma operacao imutavel por arquivo JSON.
 - `objects/sha256` guarda mascaras, tiles e outros artefatos sem duplicacao.
 - `media/originals` guarda materiais imutaveis e `media/proxies` as copias leves.
-- `frames/originals` guarda a sequencia sem perda extraida do material.
+- `frames/originals/<fonte-id>` guarda separadamente a sequência sem perda de cada fonte.
 - `worktrees` materializa somente os arquivos necessarios para cada branch.
 - `cache/jobs` registra checkpoints e `cache/thumbnails` conteudo recriavel.
 - `exports` separa previews e renders finais do material de trabalho.

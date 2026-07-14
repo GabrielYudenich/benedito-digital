@@ -55,6 +55,7 @@ Antes de publicar, também deve ser feito um ciclo manual em uma máquina Window
 - instalar pelo MSI;
 - abrir pelo Menu Iniciar;
 - criar um projeto e importar um vídeo curto;
+- reproduzir um proxy com e sem áudio pelo FFplay empacotado;
 - gerar proxy e extrair frames observando o progresso;
 - exportar H.264 com áudio;
 - desinstalar e confirmar a remoção do atalho.

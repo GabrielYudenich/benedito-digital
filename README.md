@@ -59,6 +59,8 @@ Guias: [película](docs/film-restoration.md), [colaboração](docs/collaboration
 - Central de Progresso com porcentagem, etapa atual, tempo decorrido e estimativa;
 - cancelamento seguro e opção para continuar trabalhando em segundo plano;
 - preparação visual da extração com FPS, quantidade de frames, espaço estimado e espaço livre;
+- árvore de mídia por fonte, com proxies, ação de extração e frames paginados de 100 em 100;
+- player de referência com proxy, reprodução contínua e áudio opcional;
 - gerenciador visual de branches e histórico por frame;
 - escala de leitura de 90% a 150%.
 
@@ -67,7 +69,7 @@ Guias: [película](docs/film-restoration.md), [colaboração](docs/collaboration
 Requisitos principais:
 
 - Python 3.11 ou compatível;
-- FFmpeg e FFprobe no `PATH`, em `vendor/ffmpeg/bin` ou no pacote Windows;
+- FFmpeg, FFprobe e FFplay no `PATH`, em `vendor/ffmpeg/bin` ou no pacote Windows;
 - dependências de `requirements.txt`.
 
 No PowerShell:

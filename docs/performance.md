@@ -25,6 +25,12 @@ metadados começa somente depois da confirmação e leva a uma segunda tela de r
   MKV lossless;
 - ambos mostram dados estimados, espaço livre e reserva de segurança antes de começar.
 
+Proxy e frames são etapas diferentes. O proxy é pequeno e serve ao player de referência;
+os PNGs sem perda podem ocupar muito mais espaço e, por segurança, só são gerados após uma
+confirmação própria. A árvore `Mídia` mostra `Frames (0)` e a ação de extração enquanto a
+sequência não existe. Depois, mostra páginas de 100 quadros sem criar milhares de linhas de
+interface ao mesmo tempo.
+
 O trecho usa FFV1 intraframe e áudio PCM. Ele não adiciona uma compressão destrutiva antes
 da restauração, mas pode ser maior que um vídeo de entrega comum. A origem recebe registro
 de proveniência com nome, tamanho, data, intervalo e codecs usados.
