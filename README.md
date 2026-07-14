@@ -20,7 +20,8 @@ um projeto.
 A branch `develop` concentra a validação da próxima versão. A fundação atual inclui:
 
 - importação transacional de originais grandes, com SHA-256, progresso e cancelamento;
-- escolha guiada entre importar o filme inteiro ou um trecho lossless com início e final;
+- escolha guiada entre importar o filme inteiro ou definir a minutagem de um trecho
+  lossless antes da análise;
 - preflight de espaço para importação e extração de frames antes de tarefas longas;
 - registro de projetos existentes em qualquer pasta local ou compartilhada, sem copiar a mídia;
 - extração de frames em PNG sem perda por FFmpeg;

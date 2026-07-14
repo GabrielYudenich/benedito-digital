@@ -16,10 +16,13 @@ também teste um material real longo, pois desempenho de codec, disco e GPU depe
 
 ## Primeiro teste com um filme grande
 
-Ao selecionar um vídeo, o Benedito analisa somente os metadados e pergunta antes de copiar:
+Ao selecionar um vídeo, o Benedito pergunta o que será importado antes de iniciar qualquer
+análise. No modo de trecho, início e final ficam na própria janela inicial. A leitura dos
+metadados começa somente depois da confirmação e leva a uma segunda tela de revisão:
 
 - **Filme inteiro** copia e verifica o arquivo completo em streaming;
-- **Somente um trecho** recebe início e final em `HH:MM:SS` e cria um MKV lossless;
+- **Somente um trecho** recebe início e final em `HH:MM:SS` antes da análise e cria um
+  MKV lossless;
 - ambos mostram dados estimados, espaço livre e reserva de segurança antes de começar.
 
 O trecho usa FFV1 intraframe e áudio PCM. Ele não adiciona uma compressão destrutiva antes
