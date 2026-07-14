@@ -14,11 +14,15 @@ class CameraSegmentsDialog:
         add_callback,
         delete_callback,
         apply_callback,
+        stabilize_callback,
+        clean_plate_callback,
     ):
         self.detect_callback = detect_callback
         self.add_callback = add_callback
         self.delete_callback = delete_callback
         self.apply_callback = apply_callback
+        self.stabilize_callback = stabilize_callback
+        self.clean_plate_callback = clean_plate_callback
         self.current_range = current_range
         self.segments = []
         self.window = tk.Toplevel(parent)
@@ -113,9 +117,39 @@ class CameraSegmentsDialog:
             padx=12,
             pady=8,
         ).pack(side=tk.RIGHT)
+
+        segment_actions = tk.Frame(self.window, bg="#241c31", padx=14, pady=12)
+        segment_actions.pack(fill=tk.X, padx=24, pady=(0, 18))
+        tk.Label(
+            segment_actions,
+            text="Aplicar ao segmento selecionado:",
+            font=("Segoe UI", 10, "bold"),
+            fg="#f5f3f7",
+            bg="#241c31",
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        tk.Button(
+            segment_actions,
+            text="Estabilizar câmera",
+            command=self._stabilize,
+            bg="#352a45",
+            fg="white",
+            relief=tk.FLAT,
+            padx=12,
+            pady=7,
+        ).pack(side=tk.LEFT, padx=4)
+        tk.Button(
+            segment_actions,
+            text="Criar placa limpa",
+            command=self._clean_plate,
+            bg="#a855f7",
+            fg="#0b0712",
+            relief=tk.FLAT,
+            padx=12,
+            pady=7,
+        ).pack(side=tk.LEFT, padx=4)
         self.set_segments(segments)
 
-    def set_segments(self, segments):
+    def set_segments(self, segments, selected_id=None):
         self.segments = list(segments)
         for item in self.tree.get_children(""):
             self.tree.delete(item)
@@ -127,6 +161,10 @@ class CameraSegmentsDialog:
                 text=segment.name,
                 values=(segment.start + 1, segment.end + 1, segment.end - segment.start + 1),
             )
+        if selected_id and self.tree.exists(selected_id):
+            self.tree.selection_set(selected_id)
+            self.tree.focus(selected_id)
+            self.tree.see(selected_id)
 
     def set_detecting(self, active):
         self.detect_button.config(
@@ -157,4 +195,16 @@ class CameraSegmentsDialog:
         segment = self._selected()
         if segment:
             self.apply_callback(segment)
+            self.window.destroy()
+
+    def _stabilize(self):
+        segment = self._selected()
+        if segment:
+            self.stabilize_callback(segment)
+            self.window.destroy()
+
+    def _clean_plate(self):
+        segment = self._selected()
+        if segment:
+            self.clean_plate_callback(segment)
             self.window.destroy()

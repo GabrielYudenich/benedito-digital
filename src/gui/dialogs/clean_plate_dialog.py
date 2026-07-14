@@ -4,7 +4,14 @@ import tkinter as tk
 
 
 class CleanPlateDialog:
-    def __init__(self, parent, start_frame, end_frame, start_callback):
+    def __init__(
+        self,
+        parent,
+        start_frame,
+        end_frame,
+        has_selection,
+        start_callback,
+    ):
         self.start_callback = start_callback
         self.window = tk.Toplevel(parent)
         self.window.title("Placa limpa de fundo")
@@ -81,6 +88,37 @@ class CleanPlateDialog:
             justify=tk.LEFT,
         ).pack(anchor=tk.W, pady=(7, 0))
 
+        selection_panel = tk.Frame(
+            self.window, bg="#1d2939", padx=16, pady=14
+        )
+        selection_panel.pack(fill=tk.X, padx=24, pady=(0, 16))
+        self.selection_var = tk.BooleanVar(value=bool(has_selection))
+        selection_toggle = tk.Checkbutton(
+            selection_panel,
+            text="Usar a seleção atual como recorte em todo o trecho",
+            variable=self.selection_var,
+            fg="#f5f3f7",
+            bg="#1d2939",
+            selectcolor="#352a45",
+            activebackground="#1d2939",
+            activeforeground="#f5f3f7",
+        )
+        selection_toggle.pack(anchor=tk.W)
+        if not has_selection:
+            selection_toggle.config(state=tk.DISABLED)
+        tk.Label(
+            selection_panel,
+            text=(
+                "Faça antes uma seleção Retângulo ou Laço no frame representativo. "
+                "O mesmo recorte será usado como região segura da placa nos demais frames."
+            ),
+            font=("Segoe UI", 9),
+            fg="#b8afc4",
+            bg="#1d2939",
+            wraplength=580,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, pady=(6, 0))
+
         buttons = tk.Frame(self.window, bg="#17131f")
         buttons.pack(fill=tk.X, side=tk.BOTTOM, padx=24, pady=20)
         tk.Button(
@@ -107,5 +145,6 @@ class CleanPlateDialog:
 
     def _start(self):
         apply_after_build = bool(self.apply_var.get())
+        use_selection = bool(self.selection_var.get())
         self.window.destroy()
-        self.start_callback(apply_after_build)
+        self.start_callback(apply_after_build, use_selection)

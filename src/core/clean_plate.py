@@ -154,6 +154,24 @@ def apply_clean_plate(
     return np.clip(output, 0, 255).astype(np.uint8), diagnostics
 
 
+def restrict_defect_mask(
+    defect_mask: np.ndarray,
+    *,
+    frame_selection: np.ndarray | None = None,
+    application_region: np.ndarray | None = None,
+) -> np.ndarray:
+    """Limit plate application to a shared region or the current frame selection."""
+    region = application_region if application_region is not None else frame_selection
+    if region is None:
+        return defect_mask
+    region = cv2.resize(
+        region,
+        (defect_mask.shape[1], defect_mask.shape[0]),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    return cv2.bitwise_and(defect_mask, region)
+
+
 def _align_translation(frame: np.ndarray, reference: np.ndarray):
     height, width = reference.shape[:2]
     scale = min(1.0, 320.0 / max(width, height))

@@ -14,6 +14,7 @@ import numpy as np
 import shutil
 import threading
 import queue
+import time
 from pathlib import Path
 
 from gui.themes.dark_theme import DarkTheme
@@ -38,7 +39,12 @@ from core.selections import polygon_mask, rectangle_mask, selection_bounds
 from core.storage import estimate_lossless_frames_bytes, require_free_space
 from core.accessibility import AccessibilityPreferences
 from core.camera_segments import CameraSegment, CameraSegmentStore, detect_camera_segments
-from core.clean_plate import apply_clean_plate, build_clean_plate, detect_transient_defects
+from core.clean_plate import (
+    apply_clean_plate,
+    build_clean_plate,
+    detect_transient_defects,
+    restrict_defect_mask,
+)
 from gui.controllers.frame_retouch_controller import FrameRetouchController
 from gui.controllers.film_registration_controller import FilmRegistrationController
 from gui.controllers.collaboration_controller import CollaborationController
@@ -197,6 +203,10 @@ class EditorScreen:
         self._detached_render_job = None
         self._frame_bottom_visible = True
         self._updating_frame_slider = False
+        self._frame_review_playing = False
+        self._frame_review_direction = 1
+        self._frame_review_job = None
+        self._frame_review_next_due = None
         self.undo_stack = []
         self.redo_stack = []
         self._play_pulse_job = None
@@ -228,6 +238,8 @@ class EditorScreen:
         self.total_frames = self.frame_manager.get_frame_count() or self.project_state.get_total_frames()
         self.is_playing = False
         self.audio_enabled_var = tk.BooleanVar(value=True)
+        self.range_start_var = tk.StringVar(value="1")
+        self.range_end_var = tk.StringVar(value="1")
         self.current_video = None
         self.current_video_path = self.project_state.get_video_path()
         self.selected_tool = "brush"
@@ -610,6 +622,33 @@ class EditorScreen:
         self.create_toolbar(main_frame)
         self.create_panels(main_frame)
         self.create_status_bar(main_frame)
+
+    def _make_compact_button(
+        self, parent, text, command, *, width=None, accent=False
+    ):
+        options = {
+            "text": text,
+            "command": command,
+            "font": DarkTheme.FONTS['small'],
+            "bg": (
+                DarkTheme.COLORS['accent_primary']
+                if accent
+                else DarkTheme.COLORS['bg_tertiary']
+            ),
+            "fg": (
+                DarkTheme.COLORS['text_inverse']
+                if accent
+                else DarkTheme.COLORS['text_primary']
+            ),
+            "relief": tk.FLAT,
+            "bd": 0,
+            "padx": 8,
+            "pady": 4,
+            "cursor": "hand2",
+        }
+        if width is not None:
+            options["width"] = width
+        return tk.Button(parent, **options)
 
     def create_toolbar(self, parent):
         """Create main toolbar"""
@@ -1222,17 +1261,6 @@ class EditorScreen:
             cursor='hand2',
         )
         self.frame_bottom_toggle_btn.pack(side=tk.RIGHT, padx=3)
-        tk.Button(
-            annotation_bar,
-            text="🎥 Cenas/câmeras...",
-            command=self.open_camera_segments_dialog,
-            bg=DarkTheme.COLORS['bg_tertiary'],
-            fg=DarkTheme.COLORS['text_primary'],
-            relief=tk.FLAT,
-            padx=9,
-            pady=4,
-        ).pack(side=tk.LEFT, padx=3)
-
         self.range_summary_var = tk.StringVar(value="Intervalo: todos os frames")
         tk.Label(
             annotation_bar,
@@ -1242,22 +1270,143 @@ class EditorScreen:
             bg=DarkTheme.COLORS['bg_secondary'],
         ).pack(side=tk.RIGHT, padx=12)
 
+        work_range_bar = tk.Frame(
+            self.frame_bottom_panel, bg=DarkTheme.COLORS['bg_secondary']
+        )
+        work_range_bar.pack(fill=tk.X, padx=10, pady=(0, 8))
+        tk.Label(
+            work_range_bar,
+            text="Trecho de trabalho:",
+            font=DarkTheme.FONTS['small'],
+            fg=DarkTheme.COLORS['text_primary'],
+            bg=DarkTheme.COLORS['bg_secondary'],
+        ).pack(side=tk.LEFT, padx=(8, 5), pady=6)
+        self.timeline_range_start_entry = tk.Entry(
+            work_range_bar,
+            width=7,
+            textvariable=self.range_start_var,
+            bg=DarkTheme.COLORS['bg_primary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            insertbackground=DarkTheme.COLORS['accent_primary'],
+        )
+        self.timeline_range_start_entry.pack(side=tk.LEFT, padx=2, pady=5)
+        tk.Label(
+            work_range_bar,
+            text="até",
+            font=DarkTheme.FONTS['small'],
+            fg=DarkTheme.COLORS['text_secondary'],
+            bg=DarkTheme.COLORS['bg_secondary'],
+        ).pack(side=tk.LEFT, padx=3)
+        self.timeline_range_end_entry = tk.Entry(
+            work_range_bar,
+            width=7,
+            textvariable=self.range_end_var,
+            bg=DarkTheme.COLORS['bg_primary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            insertbackground=DarkTheme.COLORS['accent_primary'],
+        )
+        self.timeline_range_end_entry.pack(side=tk.LEFT, padx=2, pady=5)
+        for entry in (
+            self.timeline_range_start_entry,
+            self.timeline_range_end_entry,
+        ):
+            entry.bind("<Return>", lambda _event: self._commit_work_range())
+            entry.bind("<FocusOut>", lambda _event: self._update_range_summary())
+        self._make_compact_button(
+            work_range_bar, "I = atual", self._set_range_start
+        ).pack(side=tk.LEFT, padx=3)
+        self._make_compact_button(
+            work_range_bar, "O = atual", self._set_range_end
+        ).pack(side=tk.LEFT, padx=3)
+        self._make_compact_button(
+            work_range_bar, "Aplicar trecho", self._commit_work_range
+        ).pack(side=tk.LEFT, padx=3)
+        self._make_compact_button(
+            work_range_bar, "🎥 Cenas/câmeras...", self.open_camera_segments_dialog
+        ).pack(side=tk.LEFT, padx=3)
+
+        review_controls = tk.Frame(
+            work_range_bar, bg=DarkTheme.COLORS['bg_secondary']
+        )
+        review_controls.pack(side=tk.RIGHT, padx=(8, 4))
+        tk.Label(
+            review_controls,
+            text="Revisão sem áudio:",
+            font=DarkTheme.FONTS['small'],
+            fg=DarkTheme.COLORS['text_secondary'],
+            bg=DarkTheme.COLORS['bg_secondary'],
+        ).pack(side=tk.LEFT, padx=(0, 4))
+        self.frame_review_speed_var = tk.StringVar(value="1x")
+        self.frame_review_speed_combo = ttk.Combobox(
+            review_controls,
+            textvariable=self.frame_review_speed_var,
+            values=("0.25x", "0.5x", "1x", "2x", "4x"),
+            state="readonly",
+            width=6,
+            style="Dark.TCombobox",
+        )
+        self.frame_review_speed_combo.pack(side=tk.LEFT, padx=3, pady=5)
+        self._make_compact_button(
+            review_controls,
+            "◀",
+            lambda: self.start_frame_review(-1),
+            width=3,
+        ).pack(side=tk.LEFT, padx=2)
+        self._make_compact_button(
+            review_controls, "■", self.stop_frame_review, width=3
+        ).pack(side=tk.LEFT, padx=2)
+        self._make_compact_button(
+            review_controls,
+            "▶",
+            lambda: self.start_frame_review(1),
+            width=3,
+            accent=True,
+        ).pack(side=tk.LEFT, padx=2)
+
+        self.range_overview_canvas = tk.Canvas(
+            self.frame_bottom_panel,
+            height=24,
+            bg=DarkTheme.COLORS['bg_primary'],
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        self.range_overview_canvas.pack(fill=tk.X, padx=18, pady=(0, 7))
+        self.range_overview_canvas.bind(
+            "<Button-1>", self._on_range_overview_click
+        )
+        self.range_overview_canvas.bind(
+            "<B1-Motion>", self._on_range_overview_click
+        )
+        self.range_overview_canvas.bind(
+            "<Configure>", lambda _event: self._draw_range_overview()
+        )
+
         self.frame_collapsible_panel = tk.Frame(
             self.frame_bottom_panel, bg=DarkTheme.COLORS['bg_primary']
         )
         self.frame_collapsible_panel.pack(fill=tk.X)
 
-        # Frame navigation slider (timeline)
+        frame_navigation_bar = tk.Frame(
+            self.frame_collapsible_panel, bg=DarkTheme.COLORS['bg_primary']
+        )
+        frame_navigation_bar.pack(fill=tk.X, padx=10, pady=(0, 8))
+        tk.Label(
+            frame_navigation_bar,
+            text="Navegar por todos os frames:",
+            font=DarkTheme.FONTS['small'],
+            fg=DarkTheme.COLORS['text_secondary'],
+            bg=DarkTheme.COLORS['bg_primary'],
+        ).pack(side=tk.LEFT, padx=(0, 8))
         self.frame_slider_var = tk.IntVar(value=1)
         self.frame_slider = ttk.Scale(
-            self.frame_collapsible_panel,
+            frame_navigation_bar,
             from_=1,
             to=1,
             orient=tk.HORIZONTAL,
             variable=self.frame_slider_var,
             command=self.on_frame_slider
         )
-        self.frame_slider.pack(fill=tk.X, padx=10, pady=(0, 10))
+        self.frame_slider.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self.filmstrip_panel = tk.Frame(
             self.frame_collapsible_panel, bg=DarkTheme.COLORS['bg_primary']
@@ -1277,25 +1426,60 @@ class EditorScreen:
         self.filmstrip_canvas.bind("<Button-1>", self._on_filmstrip_click)
         self.filmstrip_canvas.bind("<MouseWheel>", self._on_filmstrip_scroll)
 
+        filmstrip_scroll_bar = tk.Frame(
+            self.filmstrip_panel, bg=DarkTheme.COLORS['bg_primary']
+        )
+        filmstrip_scroll_bar.pack(fill=tk.X, padx=10, pady=(0, 6))
+        tk.Label(
+            filmstrip_scroll_bar,
+            text="Deslocar miniaturas:",
+            font=DarkTheme.FONTS['small'],
+            fg=DarkTheme.COLORS['text_secondary'],
+            bg=DarkTheme.COLORS['bg_primary'],
+        ).pack(side=tk.LEFT, padx=(0, 8))
         self.filmstrip_scroll = tk.Scrollbar(
-            self.filmstrip_panel,
+            filmstrip_scroll_bar,
             orient=tk.HORIZONTAL,
             command=self.filmstrip_canvas.xview
         )
         self.filmstrip_canvas.configure(xscrollcommand=self.filmstrip_scroll.set)
-        self.filmstrip_scroll.pack(fill=tk.X, padx=10, pady=(0, 6))
+        self.filmstrip_scroll.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # Filmstrip zoom
-        self.filmstrip_zoom_var = tk.DoubleVar(value=1.2)
-        self.filmstrip_zoom = ttk.Scale(
-            self.filmstrip_panel,
-            from_=0.7,
-            to=2.5,
-            orient=tk.HORIZONTAL,
-            variable=self.filmstrip_zoom_var,
-            command=lambda _value: self._schedule_filmstrip_update()
+        zoom_controls = tk.Frame(
+            self.filmstrip_panel, bg=DarkTheme.COLORS['bg_primary']
         )
-        self.filmstrip_zoom.pack(fill=tk.X, padx=10, pady=(0, 10))
+        zoom_controls.pack(fill=tk.X, padx=10, pady=(0, 8))
+        tk.Label(
+            zoom_controls,
+            text="Tamanho das miniaturas:",
+            font=DarkTheme.FONTS['small'],
+            fg=DarkTheme.COLORS['text_secondary'],
+            bg=DarkTheme.COLORS['bg_primary'],
+        ).pack(side=tk.LEFT)
+        self.filmstrip_zoom_var = tk.DoubleVar(value=1.2)
+        self.filmstrip_zoom_label = tk.Label(
+            zoom_controls,
+            text="120%",
+            width=6,
+            font=DarkTheme.FONTS['small'],
+            fg=DarkTheme.COLORS['text_primary'],
+            bg=DarkTheme.COLORS['bg_primary'],
+        )
+        self.filmstrip_zoom_label.pack(side=tk.LEFT, padx=8)
+        self._make_compact_button(
+            zoom_controls,
+            "🔍 −  Menores",
+            lambda: self._change_filmstrip_zoom(-0.2),
+        ).pack(side=tk.LEFT, padx=2)
+        self._make_compact_button(
+            zoom_controls,
+            "🔍 +  Maiores",
+            lambda: self._change_filmstrip_zoom(0.2),
+            accent=True,
+        ).pack(side=tk.LEFT, padx=2)
+        self._make_compact_button(
+            zoom_controls, "Restaurar 120%", self._reset_filmstrip_zoom
+        ).pack(side=tk.LEFT, padx=5)
 
     def create_processing_tab(self):
         """Create processing tab"""
@@ -1995,13 +2179,15 @@ class EditorScreen:
 
         tk.Label(range_frame, text="Intervalo:", font=('Arial', 9),
                  fg=DarkTheme.COLORS['text_secondary'], bg=DarkTheme.COLORS['bg_secondary']).grid(row=0, column=0, sticky=tk.W)
-        self.range_start_entry = tk.Entry(range_frame, width=6)
-        self.range_start_entry.insert(0, "1")
+        self.range_start_entry = tk.Entry(
+            range_frame, width=6, textvariable=self.range_start_var
+        )
         self.range_start_entry.grid(row=0, column=1, padx=(6, 6))
         self.range_start_entry.bind("<Return>", lambda _event: self._update_range_summary())
         self.range_start_entry.bind("<FocusOut>", lambda _event: self._update_range_summary())
-        self.range_end_entry = tk.Entry(range_frame, width=6)
-        self.range_end_entry.insert(0, "1")
+        self.range_end_entry = tk.Entry(
+            range_frame, width=6, textvariable=self.range_end_var
+        )
         self.range_end_entry.grid(row=0, column=2, padx=(0, 6))
         self.range_end_entry.bind("<Return>", lambda _event: self._update_range_summary())
         self.range_end_entry.bind("<FocusOut>", lambda _event: self._update_range_summary())
@@ -3270,22 +3456,26 @@ class EditorScreen:
     # Frame navigation
     def first_frame(self):
         if self.frame_manager:
+            self.stop_frame_review(silent=True)
             self.frame_manager.go_to_frame(0)
             self.show_current_frame()
             self.update_frame_counter()
 
     def previous_frame(self):
+        self.stop_frame_review(silent=True)
         if self.frame_manager and self.frame_manager.previous_frame():
             self.show_current_frame()
             self.update_frame_counter()
 
     def next_frame(self):
+        self.stop_frame_review(silent=True)
         if self.frame_manager and self.frame_manager.next_frame():
             self.show_current_frame()
             self.update_frame_counter()
 
     def last_frame(self):
         if self.frame_manager:
+            self.stop_frame_review(silent=True)
             total_frames = self.frame_manager.get_frame_count()
             if total_frames > 0:
                 self.frame_manager.go_to_frame(total_frames - 1)
@@ -4616,13 +4806,222 @@ class EditorScreen:
         if not hasattr(self, "range_summary_var"):
             return
         try:
-            start = max(1, int(self.range_start_entry.get()))
-            end = max(start, int(self.range_end_entry.get()))
+            start = max(1, int(self.range_start_var.get()))
+            end = max(start, int(self.range_end_var.get()))
             self.range_summary_var.set(
                 f"Intervalo: {start}–{end} ({end - start + 1} frames)"
             )
         except (ValueError, AttributeError):
             self.range_summary_var.set("Intervalo: não definido")
+        self._draw_range_overview()
+
+    def _current_work_range(self, *, show_error=False):
+        total = len(self.frame_manager.frames) if self.frame_manager else 0
+        if total <= 0:
+            return None
+        try:
+            start = int(self.range_start_var.get())
+            end = int(self.range_end_var.get())
+        except (TypeError, ValueError):
+            if show_error:
+                messagebox.showerror(
+                    "Trecho inválido", "Informe números de frame válidos."
+                )
+            return None
+        if start < 1 or end < start or end > total:
+            if show_error:
+                messagebox.showerror(
+                    "Trecho inválido",
+                    f"Escolha um intervalo entre 1 e {total}, com o início antes do final.",
+                )
+            return None
+        return start - 1, end - 1
+
+    def _commit_work_range(self):
+        bounds = self._current_work_range(show_error=True)
+        if bounds is None:
+            return False
+        start, end = bounds
+        self.range_start_var.set(str(start + 1))
+        self.range_end_var.set(str(end + 1))
+        self._update_range_summary()
+        self._update_filmstrip(self.frame_manager.current_frame_index)
+        self.status_var.set(
+            f"Trecho ativo: frames {start + 1}–{end + 1}. "
+            "Use Cenas/câmeras para salvá-lo."
+        )
+        return True
+
+    def _draw_range_overview(self):
+        canvas = getattr(self, "range_overview_canvas", None)
+        if canvas is None:
+            return
+        canvas.delete("all")
+        total = len(self.frame_manager.frames) if self.frame_manager else 0
+        width = max(1, canvas.winfo_width())
+        if total <= 0 or width <= 2:
+            return
+        padding = 4
+        usable = max(1, width - padding * 2)
+
+        def position(frame_index):
+            if total <= 1:
+                return padding
+            return padding + usable * frame_index / (total - 1)
+
+        canvas.create_rectangle(
+            padding,
+            5,
+            width - padding,
+            20,
+            fill=DarkTheme.COLORS['bg_tertiary'],
+            outline=DarkTheme.COLORS['border_light'],
+        )
+        try:
+            segments = self.camera_segment_store.list(self._camera_segment_source())
+        except Exception:
+            segments = []
+        segment_colors = ("#2563eb", "#0f766e", "#7c3aed", "#9a3412")
+        for index, segment in enumerate(segments):
+            canvas.create_rectangle(
+                position(segment.start),
+                5,
+                max(position(segment.start) + 2, position(segment.end)),
+                11,
+                fill=segment_colors[index % len(segment_colors)],
+                outline="",
+            )
+        bounds = self._current_work_range()
+        if bounds is not None:
+            start, end = bounds
+            canvas.create_rectangle(
+                position(start),
+                12,
+                max(position(start) + 2, position(end)),
+                20,
+                fill=DarkTheme.COLORS['accent_primary'],
+                outline="",
+            )
+        current_x = position(self.frame_manager.current_frame_index)
+        canvas.create_line(current_x, 2, current_x, 22, fill="#ffffff", width=2)
+
+    def _on_range_overview_click(self, event):
+        if not self.frame_manager or not self.frame_manager.frames:
+            return "break"
+        width = max(1, self.range_overview_canvas.winfo_width() - 8)
+        ratio = max(0.0, min(1.0, (event.x - 4) / width))
+        target = int(round(ratio * (len(self.frame_manager.frames) - 1)))
+        self.stop_frame_review(silent=True)
+        if self.frame_manager.go_to_frame(target):
+            self.show_current_frame()
+            self.update_frame_counter()
+        return "break"
+
+    def _change_filmstrip_zoom(self, delta):
+        current = float(self.filmstrip_zoom_var.get())
+        value = max(0.7, min(2.5, round(current + float(delta), 2)))
+        self.filmstrip_zoom_var.set(value)
+        self.filmstrip_zoom_label.config(text=f"{value * 100:.0f}%")
+        self._schedule_filmstrip_update(20)
+
+    def _reset_filmstrip_zoom(self):
+        self.filmstrip_zoom_var.set(1.2)
+        self.filmstrip_zoom_label.config(text="120%")
+        self._schedule_filmstrip_update(20)
+
+    def _frame_review_speed(self):
+        try:
+            return max(
+                0.1,
+                float(self.frame_review_speed_var.get().lower().replace("x", "")),
+            )
+        except (AttributeError, TypeError, ValueError):
+            return 1.0
+
+    def _frame_review_fps(self):
+        try:
+            fps = float(getattr(self.video_player, "fps", 0) or 0)
+        except (TypeError, ValueError):
+            fps = 0.0
+        return fps if fps > 0 else 24.0
+
+    def start_frame_review(self, direction=1):
+        bounds = self._current_work_range(show_error=True)
+        if bounds is None:
+            return
+        start, end = bounds
+        direction = 1 if direction >= 0 else -1
+        current = self.frame_manager.current_frame_index
+        if current < start or current > end:
+            self.frame_manager.go_to_frame(start if direction > 0 else end)
+            self.show_current_frame()
+            self.update_frame_counter()
+        self.stop_frame_review(silent=True)
+        self._frame_review_direction = direction
+        self._frame_review_playing = True
+        interval = 1.0 / (self._frame_review_fps() * self._frame_review_speed())
+        self._frame_review_next_due = time.perf_counter() + interval
+        direction_label = "avançando" if direction > 0 else "voltando"
+        self.status_var.set(
+            f"Revisando frames sem áudio em {self.frame_review_speed_var.get()} "
+            f"({direction_label})"
+        )
+        self._schedule_frame_review(max(1, int(interval * 1000)))
+
+    def _schedule_frame_review(self, delay):
+        if self._frame_review_job is not None:
+            try:
+                self.root.after_cancel(self._frame_review_job)
+            except Exception:
+                pass
+        self._frame_review_job = self.root.after(delay, self._frame_review_tick)
+
+    def _frame_review_tick(self):
+        self._frame_review_job = None
+        if not self._frame_review_playing or not self.frame_manager:
+            return
+        bounds = self._current_work_range()
+        if bounds is None:
+            self.stop_frame_review()
+            return
+        start, end = bounds
+        interval = 1.0 / (self._frame_review_fps() * self._frame_review_speed())
+        now = time.perf_counter()
+        due = self._frame_review_next_due or now
+        if now < due:
+            self._schedule_frame_review(max(1, int((due - now) * 1000)))
+            return
+        steps = max(1, int((now - due) / interval) + 1)
+        target = self.frame_manager.current_frame_index + (
+            self._frame_review_direction * steps
+        )
+        reached_end = target > end if self._frame_review_direction > 0 else target < start
+        target = max(start, min(end, target))
+        self._frame_review_next_due = due + steps * interval
+        if self.frame_manager.go_to_frame(target):
+            self.show_current_frame()
+            self.update_frame_counter()
+        if reached_end:
+            self.stop_frame_review()
+            return
+        delay = max(
+            1,
+            int((self._frame_review_next_due - time.perf_counter()) * 1000),
+        )
+        self._schedule_frame_review(delay)
+
+    def stop_frame_review(self, silent=False):
+        was_playing = self._frame_review_playing
+        self._frame_review_playing = False
+        self._frame_review_next_due = None
+        if self._frame_review_job is not None:
+            try:
+                self.root.after_cancel(self._frame_review_job)
+            except Exception:
+                pass
+            self._frame_review_job = None
+        if was_playing and not silent:
+            self.status_var.set("Revisão de frames pausada")
 
     def _update_filmstrip(self, center_index):
         if not self.frame_manager or not hasattr(self, "filmstrip_canvas"):
@@ -4635,6 +5034,7 @@ class EditorScreen:
         total = len(frames)
         zoom = self.filmstrip_zoom_var.get() if hasattr(self, "filmstrip_zoom_var") else 1.0
         thumb_h = int(90 * max(0.6, min(2.5, float(zoom))))
+        self.filmstrip_canvas.configure(height=thumb_h + 10)
         current_info = self.frame_manager.get_current_frame_info()
         if current_info and current_info.get("height"):
             self._filmstrip_aspect_ratio = (
@@ -4720,8 +5120,7 @@ class EditorScreen:
             return
         if self.workspace:
             for frame_index, value in self.workspace.get_frame_statuses().items():
-                nearest = min(indices, key=lambda index: abs(index - frame_index))
-                position = self._filmstrip_positions.get(nearest)
+                position = self._filmstrip_positions.get(frame_index)
                 color = self.FRAME_STATUS_COLORS.get(value.get("status"))
                 if not position or not color:
                     continue
@@ -4737,13 +5136,28 @@ class EditorScreen:
                 )
                 self._filmstrip_map[marker] = frame_index
         try:
-            range_markers = (
-                (int(self.range_start_entry.get()) - 1, "#22c55e"),
-                (int(self.range_end_entry.get()) - 1, "#f43f5e"),
-            )
+            range_start = int(self.range_start_var.get()) - 1
+            range_end = int(self.range_end_var.get()) - 1
+            for frame_index in indices:
+                if not range_start <= frame_index <= range_end:
+                    continue
+                position = self._filmstrip_positions.get(frame_index)
+                if not position:
+                    continue
+                x, thumb_width = position
+                marker = self.filmstrip_canvas.create_rectangle(
+                    x,
+                    5 + thumb_h - 5,
+                    x + thumb_width,
+                    5 + thumb_h,
+                    fill=DarkTheme.COLORS['accent_primary'],
+                    outline="",
+                    tags="annotation",
+                )
+                self._filmstrip_map[marker] = frame_index
+            range_markers = ((range_start, "#22c55e"), (range_end, "#f43f5e"))
             for frame_index, color in range_markers:
-                nearest = min(indices, key=lambda index: abs(index - frame_index))
-                position = self._filmstrip_positions.get(nearest)
+                position = self._filmstrip_positions.get(frame_index)
                 if not position:
                     continue
                 x, thumb_width = position
@@ -4915,6 +5329,7 @@ class EditorScreen:
         )
         if idx is None:
             return
+        self.stop_frame_review(silent=True)
         if self.frame_manager and self.frame_manager.go_to_frame(idx):
             self.show_current_frame()
             self.update_frame_counter()
@@ -4932,6 +5347,7 @@ class EditorScreen:
             return
         if self._updating_frame_slider:
             return
+        self.stop_frame_review(silent=True)
         if self._slider_navigation_job:
             try:
                 self.root.after_cancel(self._slider_navigation_job)
@@ -4956,8 +5372,7 @@ class EditorScreen:
             return
         info = self.frame_manager.get_current_frame_info()
         if info:
-            self.range_start_entry.delete(0, tk.END)
-            self.range_start_entry.insert(0, str(info['index'] + 1))
+            self.range_start_var.set(str(info['index'] + 1))
             self._update_range_summary()
             self._update_filmstrip(info['index'])
 
@@ -4966,8 +5381,7 @@ class EditorScreen:
             return
         info = self.frame_manager.get_current_frame_info()
         if info:
-            self.range_end_entry.delete(0, tk.END)
-            self.range_end_entry.insert(0, str(info['index'] + 1))
+            self.range_end_var.set(str(info['index'] + 1))
             self._update_range_summary()
             self._update_filmstrip(info['index'])
 
@@ -5133,6 +5547,8 @@ class EditorScreen:
             self._add_camera_segment,
             self._delete_camera_segment,
             self._apply_camera_segment,
+            self._stabilize_camera_segment,
+            self._clean_plate_camera_segment,
         )
 
     def _detect_camera_segments(self, dialog):
@@ -5153,6 +5569,7 @@ class EditorScreen:
 
         def detection_complete(segments):
             self.camera_segment_store.replace(source, segments)
+            self._draw_range_overview()
             if self.workspace:
                 self.workspace.commit_operation(
                     "camera_segments.detect",
@@ -5192,7 +5609,10 @@ class EditorScreen:
         source = self._camera_segment_source()
         segment = CameraSegment.create(name, start - 1, end - 1)
         self.camera_segment_store.add(source, segment)
-        dialog.set_segments(self.camera_segment_store.list(source))
+        dialog.set_segments(
+            self.camera_segment_store.list(source), selected_id=segment.id
+        )
+        self._draw_range_overview()
         if self.workspace:
             self.workspace.commit_operation(
                 "camera_segment.add",
@@ -5209,6 +5629,7 @@ class EditorScreen:
         source = self._camera_segment_source()
         self.camera_segment_store.delete(source, segment.id)
         dialog.set_segments(self.camera_segment_store.list(source))
+        self._draw_range_overview()
         if self.workspace:
             self.workspace.commit_operation(
                 "camera_segment.delete",
@@ -5216,17 +5637,26 @@ class EditorScreen:
             )
 
     def _apply_camera_segment(self, segment):
-        self.range_start_entry.delete(0, tk.END)
-        self.range_start_entry.insert(0, str(segment.start + 1))
-        self.range_end_entry.delete(0, tk.END)
-        self.range_end_entry.insert(0, str(segment.end + 1))
+        self.stop_frame_review(silent=True)
+        self.range_start_var.set(str(segment.start + 1))
+        self.range_end_var.set(str(segment.end + 1))
         self._update_range_summary()
-        self.frame_manager.go_to_frame(segment.start)
+        current = self.frame_manager.current_frame_index
+        target = current if segment.start <= current <= segment.end else segment.start
+        self.frame_manager.go_to_frame(target)
         self.show_current_frame()
         self.update_frame_counter()
         self.status_var.set(
             f"Intervalo ativo: {segment.name} ({segment.start + 1}–{segment.end + 1})"
         )
+
+    def _stabilize_camera_segment(self, segment):
+        self._apply_camera_segment(segment)
+        self.apply_auto_stabilization_range()
+
+    def _clean_plate_camera_segment(self, segment):
+        self._apply_camera_segment(segment)
+        self.open_clean_plate_dialog()
 
     def open_clean_plate_dialog(self):
         if not self.frame_manager or len(self.frame_manager.frames) < 3:
@@ -5248,21 +5678,49 @@ class EditorScreen:
                 "Placa limpa", "O intervalo precisa conter pelo menos três frames."
             )
             return
+        info = self.frame_manager.get_current_frame_info()
+        current_selection = (
+            self._load_selection(info["path"]) if info else None
+        )
+        has_selection = (
+            current_selection is not None
+            and selection_bounds(current_selection) is not None
+        )
         CleanPlateDialog(
             self.root,
             start + 1,
             end + 1,
-            lambda apply_after: self._start_clean_plate(start, end, apply_after),
+            has_selection,
+            lambda apply_after, use_selection: self._start_clean_plate(
+                start,
+                end,
+                apply_after,
+                use_selection,
+            ),
         )
 
-    def _start_clean_plate(self, start, end, apply_after_build):
+    def _start_clean_plate(
+        self, start, end, apply_after_build, use_current_selection=False
+    ):
         frames = list(self.frame_manager.frames)
         frames_dir = self.frame_manager.frames_dir
-        source_paths = []
-        for frame_index, filename in enumerate(frames):
-            restored = os.path.join(self.restored_dir, filename)
-            original = os.path.join(frames_dir, filename)
-            source_paths.append(restored if os.path.exists(restored) else original)
+        current_info = self.frame_manager.get_current_frame_info()
+        application_region = None
+        if use_current_selection and current_info:
+            application_region = self._load_selection_cv(
+                current_info["path"], current_info["index"]
+            )
+        source_paths = [
+            self._get_source_frame_path(frame_index)
+            or os.path.join(frames_dir, filename)
+            for frame_index, filename in enumerate(frames)
+        ]
+        if self.use_manual_stab_var.get():
+            clean_plate_output_dir = self.manual_stab_dir
+        elif self.use_auto_stab_var.get():
+            clean_plate_output_dir = self.auto_stab_dir
+        else:
+            clean_plate_output_dir = self.restored_dir
         sample_indices = sorted(
             set(np.linspace(start, end, min(15, end - start + 1), dtype=int).tolist())
         )
@@ -5273,6 +5731,7 @@ class EditorScreen:
         plate_dir = os.path.join(self.clean_plates_dir, plate_id)
         plate_path = os.path.join(plate_dir, "plate.png")
         static_mask_path = os.path.join(plate_dir, "static_background.png")
+        application_region_path = os.path.join(plate_dir, "application_region.png")
 
         def clean_plate_task(context):
             samples = []
@@ -5298,6 +5757,19 @@ class EditorScreen:
                 static_mask_path, static_mask
             ):
                 raise RuntimeError("Não foi possível salvar a placa limpa")
+            artifacts = {
+                "plate": plate_path,
+                "background_mask": static_mask_path,
+            }
+            if application_region is not None:
+                region = cv2.resize(
+                    application_region,
+                    (plate.shape[1], plate.shape[0]),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+                if not cv2.imwrite(application_region_path, region):
+                    raise RuntimeError("Não foi possível salvar o recorte da placa")
+                artifacts["application_region"] = application_region_path
             if self.workspace:
                 self.workspace.commit_operation(
                     "clean_plate.build",
@@ -5306,8 +5778,9 @@ class EditorScreen:
                         "start": start,
                         "end": end,
                         "diagnostics": diagnostics,
+                        "selection_region": application_region is not None,
                     },
-                    artifacts={"plate": plate_path, "background_mask": static_mask_path},
+                    artifacts=artifacts,
                 )
             modified = 0
             context.report(60, "Placa limpa criada")
@@ -5332,17 +5805,25 @@ class EditorScreen:
                         extra = cv2.imread(extra_path, cv2.IMREAD_GRAYSCALE) if os.path.exists(extra_path) else None
                         if extra is not None:
                             defect_mask = cv2.bitwise_or(defect_mask, extra)
-                    selection = self._load_selection_cv(
-                        os.path.join(frames_dir, frames[frame_index]), frame_index
+                    frame_selection = None
+                    if application_region is None:
+                        frame_selection = self._load_selection_cv(
+                            os.path.join(frames_dir, frames[frame_index]),
+                            frame_index,
+                        )
+                    defect_mask = restrict_defect_mask(
+                        defect_mask,
+                        frame_selection=frame_selection,
+                        application_region=application_region,
                     )
-                    if selection is not None:
-                        defect_mask = cv2.bitwise_and(defect_mask, selection)
                     restored, frame_diagnostics = apply_clean_plate(
                         current, plate, static_mask, defect_mask
                     )
                     if frame_diagnostics["replaced_pixels"]:
-                        output = os.path.join(self.restored_dir, frames[frame_index])
-                        os.makedirs(self.restored_dir, exist_ok=True)
+                        output = os.path.join(
+                            clean_plate_output_dir, frames[frame_index]
+                        )
+                        os.makedirs(clean_plate_output_dir, exist_ok=True)
                         if not cv2.imwrite(output, restored):
                             raise RuntimeError(f"Não foi possível salvar {output}")
                         chunk_artifacts[f"frame_{frame_index:09d}"] = output
@@ -6062,6 +6543,8 @@ class EditorScreen:
 
         def stabilization_complete(done):
             self.use_manual_stab_var.set(True)
+            self.view_mode = "restored"
+            self.view_mode_label.config(text="Visualização: restaurado")
             self.show_current_frame()
             self.status_var.set(f"Centralização aplicada em {done} frames")
 
@@ -6146,6 +6629,8 @@ class EditorScreen:
 
         def stabilization_complete(done):
             self.use_auto_stab_var.set(True)
+            self.view_mode = "restored"
+            self.view_mode_label.config(text="Visualização: restaurado")
             self.show_current_frame()
             self.status_var.set(f"Estabilização automática aplicada em {done} frames")
 
@@ -7495,6 +7980,7 @@ class EditorScreen:
     def on_closing(self):
         """Cleanup when closing"""
         try:
+            self.stop_frame_review(silent=True)
             if self._active_job_id:
                 self.job_manager.cancel(self._active_job_id)
             self._thumb_worker_stop.set()
