@@ -612,6 +612,7 @@ class ImportVideoDialog:
                 state="readonly",
                 values=list(WORKING_FORMAT_LABELS.values()),
                 width=54,
+                style="Dark.TCombobox",
             )
             self.format_combo.set(WORKING_FORMAT_LABELS["mkv_lossless"])
             self.format_combo.pack(fill=tk.X, pady=(7, 5))
@@ -653,6 +654,7 @@ class ImportVideoDialog:
                 state="readonly",
                 values=list(AUDIO_MODE_LABELS.values()),
                 width=54,
+                style="Dark.TCombobox",
             )
             self.audio_combo.set(AUDIO_MODE_LABELS[suggested_audio_mode])
             self.audio_combo.pack(fill=tk.X)

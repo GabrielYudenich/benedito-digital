@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 import shutil
 import threading
+import queue
 from pathlib import Path
 
 from gui.themes.dark_theme import DarkTheme
@@ -55,6 +56,7 @@ from gui.dialogs.proxy_dialog import ProxyDialog
 from gui.dialogs.restoration_workflow_dialog import RestorationWorkflowDialog, VHSProcessingDialog
 from gui.dialogs.workflow_assistant import WorkflowAssistant
 from gui.mousewheel import scroll_canvas_if_within
+from gui.frame_view import anchored_zoom_pan, clamp_view_pan, filmstrip_window_indices
 
 class EditorScreen:
     FRAME_STATUS_LABELS = {
@@ -138,6 +140,13 @@ class EditorScreen:
         self._configure_branch_paths()
         self.brush_size = 12
         self.frame_zoom = 1.0
+        self.frame_pan = (0.0, 0.0)
+        self._zoom_redraw_job = None
+        self._slider_navigation_job = None
+        self._filmstrip_update_job = None
+        self._secondary_pan_start = None
+        self._secondary_pan_origin = (0.0, 0.0)
+        self._secondary_dragged = False
         self.show_mask_overlay = True
         self.show_auto_mask = False
         self.double_pass_var = tk.BooleanVar(value=False)
@@ -164,6 +173,23 @@ class EditorScreen:
         self._thumb_cache = {}
         self._thumb_cache_order = []
         self._thumb_cache_max = 96
+        self._filmstrip_placeholder_cache = {}
+        self._thumb_generation_queue = queue.Queue()
+        self._thumb_ready_queue = queue.Queue()
+        self._thumb_generation_pending = set()
+        self._thumb_generation_lock = threading.Lock()
+        self._thumb_worker_stop = threading.Event()
+        self._thumb_worker = None
+        self._thumb_ready_job = None
+        self._frame_image_cache = {}
+        self._frame_image_cache_order = []
+        self._frame_image_cache_max = 8
+        self._current_display_image = None
+        self._detached_viewer = None
+        self._detached_canvas = None
+        self._detached_render_job = None
+        self._frame_bottom_visible = True
+        self._updating_frame_slider = False
         self.undo_stack = []
         self.redo_stack = []
         self._play_pulse_job = None
@@ -178,6 +204,12 @@ class EditorScreen:
         self._status_anim_phase = 0
         cache_root = str(self.workspace.cache_dir) if self.workspace else os.path.join(self.project_manager.current_project_path, "cache")
         self.thumb_cache_root = os.path.join(cache_root, "thumbnails", "filmstrip")
+        self._thumb_worker = threading.Thread(
+            target=self._filmstrip_thumb_worker,
+            name="benedito-filmstrip-thumbs",
+            daemon=True,
+        )
+        self._thumb_worker.start()
 
         # Initialize new components
         self.project_state = ProjectStateManager(self.project_manager.current_project_path)
@@ -199,6 +231,7 @@ class EditorScreen:
         DarkTheme.apply_accessibility(self.root, self.accessibility_preferences)
         self.load_project_videos()
         self._playback_ui_job = self.root.after(16, self._drain_playback_ui)
+        self._thumb_ready_job = self.root.after(50, self._drain_thumb_ready)
         self.root.after(250, self._show_state_recovery_notice)
 
         # Bind cleanup
@@ -263,6 +296,10 @@ class EditorScreen:
         view_menu.add_separator()
         view_menu.add_command(label="Mostrar máscara manual", command=lambda: self._toggle_var(self.show_mask_var))
         view_menu.add_command(label="Mostrar auto-máscara", command=lambda: self._toggle_var(self.show_auto_mask_var))
+        view_menu.add_separator()
+        view_menu.add_command(label="Ocultar/mostrar painel inferior", command=self.toggle_frame_bottom_panel)
+        view_menu.add_command(label="Abrir frame em segunda tela", command=self.open_detached_frame_viewer)
+        view_menu.add_command(label="Ajustar frame à janela", command=self.reset_frame_view)
         menubar.add_cascade(label="Exibir", menu=view_menu)
 
         version_menu = tk.Menu(menubar, tearoff=0)
@@ -822,10 +859,10 @@ class EditorScreen:
         tools_bar.pack(fill=tk.X, padx=10, pady=(10, 4))
 
         self.frame_tools_buttons = {}
-        def make_tool(label, tool_id):
+        def make_tool(icon, label, tool_id):
             btn = tk.Button(
                 tools_bar,
-                text=label,
+                text=f"{icon}  {label}",
                 font=DarkTheme.FONTS['small'],
                 bg=DarkTheme.COLORS['bg_tertiary'],
                 fg=DarkTheme.COLORS['text_primary'],
@@ -838,13 +875,13 @@ class EditorScreen:
             )
             btn.pack(side=tk.LEFT, padx=4)
             self.frame_tools_buttons[tool_id] = btn
-        make_tool("Selecionar", "select")
-        make_tool("Retângulo", "select_rect")
-        make_tool("Laço", "select_lasso")
-        make_tool("Pincel", "brush")
-        make_tool("Borracha", "erase")
-        make_tool("Clone", "clone")
-        make_tool("Healing", "heal")
+        make_tool("↖", "Selecionar", "select")
+        make_tool("▭", "Retângulo", "select_rect")
+        make_tool("✧", "Laço", "select_lasso")
+        make_tool("✎", "Pincel", "brush")
+        make_tool("⌫", "Borracha", "erase")
+        make_tool("⧉", "Clone", "clone")
+        make_tool("✚", "Healing", "heal")
 
         tk.Button(
             tools_bar,
@@ -943,6 +980,41 @@ class EditorScreen:
             )
             btn.pack(side=tk.LEFT, padx=2)
 
+        self.frame_bottom_toggle_btn = tk.Button(
+            nav_frame,
+            text="⌄ Ocultar painel inferior",
+            command=self.toggle_frame_bottom_panel,
+            bg=DarkTheme.COLORS['bg_tertiary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            relief=tk.FLAT,
+            padx=8,
+            pady=4,
+            cursor='hand2',
+        )
+        self.frame_bottom_toggle_btn.pack(side=tk.RIGHT, padx=3)
+        tk.Button(
+            nav_frame,
+            text="⧉ Segunda tela",
+            command=self.open_detached_frame_viewer,
+            bg=DarkTheme.COLORS['bg_tertiary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            relief=tk.FLAT,
+            padx=8,
+            pady=4,
+            cursor='hand2',
+        ).pack(side=tk.RIGHT, padx=3)
+        tk.Button(
+            nav_frame,
+            text="⊙ Ajustar",
+            command=self.reset_frame_view,
+            bg=DarkTheme.COLORS['bg_tertiary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            relief=tk.FLAT,
+            padx=8,
+            pady=4,
+            cursor='hand2',
+        ).pack(side=tk.RIGHT, padx=3)
+
         self.frame_counter = tk.Label(
             nav_frame,
             text="Frame 0 / 0",
@@ -1025,12 +1097,20 @@ class EditorScreen:
         self.frame_canvas.bind("<B3-Motion>", self._on_secondary_move)
         self.frame_canvas.bind("<ButtonRelease-3>", self._on_secondary_end)
         self.frame_canvas.bind("<MouseWheel>", self._on_mouse_wheel)
+        self.frame_canvas.bind(
+            "<Configure>", lambda _event: self._schedule_frame_redraw(80)
+        )
+
+        self.frame_bottom_panel = tk.Frame(
+            frame_frame, bg=DarkTheme.COLORS['bg_primary']
+        )
+        self.frame_bottom_panel.pack(fill=tk.X)
 
         self.selection_status_var = tk.StringVar(
             value="Seleção: nenhuma — escolha Retângulo ou Laço"
         )
         tk.Label(
-            frame_frame,
+            self.frame_bottom_panel,
             textvariable=self.selection_status_var,
             font=DarkTheme.FONTS['small'],
             fg=DarkTheme.COLORS['text_secondary'],
@@ -1038,7 +1118,7 @@ class EditorScreen:
         ).pack(anchor=tk.W, padx=12, pady=(0, 6))
 
         annotation_bar = tk.Frame(
-            frame_frame, bg=DarkTheme.COLORS['bg_secondary']
+            self.frame_bottom_panel, bg=DarkTheme.COLORS['bg_secondary']
         )
         annotation_bar.pack(fill=tk.X, padx=10, pady=(0, 8))
         tk.Label(
@@ -1055,6 +1135,7 @@ class EditorScreen:
             values=list(self.FRAME_STATUS_LABELS),
             state="readonly",
             width=24,
+            style="Dark.TCombobox",
         )
         self.frame_status_combo.pack(side=tk.LEFT, padx=(0, 6), pady=5)
         tk.Button(
@@ -1110,7 +1191,7 @@ class EditorScreen:
         # Frame navigation slider (timeline)
         self.frame_slider_var = tk.IntVar(value=1)
         self.frame_slider = ttk.Scale(
-            frame_frame,
+            self.frame_bottom_panel,
             from_=1,
             to=1,
             orient=tk.HORIZONTAL,
@@ -1119,9 +1200,14 @@ class EditorScreen:
         )
         self.frame_slider.pack(fill=tk.X, padx=10, pady=(0, 10))
 
+        self.filmstrip_panel = tk.Frame(
+            self.frame_bottom_panel, bg=DarkTheme.COLORS['bg_primary']
+        )
+        self.filmstrip_panel.pack(fill=tk.X)
+
         # Filmstrip thumbnails
         self.filmstrip_canvas = tk.Canvas(
-            frame_frame,
+            self.filmstrip_panel,
             bg=DarkTheme.COLORS['bg_secondary'],
             height=110,
             highlightthickness=1,
@@ -1133,7 +1219,7 @@ class EditorScreen:
         self.filmstrip_canvas.bind("<MouseWheel>", self._on_filmstrip_scroll)
 
         self.filmstrip_scroll = tk.Scrollbar(
-            frame_frame,
+            self.filmstrip_panel,
             orient=tk.HORIZONTAL,
             command=self.filmstrip_canvas.xview
         )
@@ -1143,12 +1229,12 @@ class EditorScreen:
         # Filmstrip zoom
         self.filmstrip_zoom_var = tk.DoubleVar(value=1.2)
         self.filmstrip_zoom = ttk.Scale(
-            frame_frame,
+            self.filmstrip_panel,
             from_=0.7,
             to=2.5,
             orient=tk.HORIZONTAL,
             variable=self.filmstrip_zoom_var,
-            command=lambda v: self._update_filmstrip(self.frame_manager.current_frame_index if self.frame_manager else 0)
+            command=lambda _value: self._schedule_filmstrip_update()
         )
         self.filmstrip_zoom.pack(fill=tk.X, padx=10, pady=(0, 10))
 
@@ -2576,8 +2662,10 @@ class EditorScreen:
             "2) Editar frames e mascaras\n"
             "3) Restaurar intervalo (ou aplicar filtro)\n"
             "4) Renderizar video restaurado\n\n"
-            "Atalhos: Left/Right = frame anterior/proximo, I/O = marcar intervalo, Ctrl+Scroll = zoom.\n"
-            "Scroll = tamanho do brush, Compare = slider de comparacao, Filmstrip = clique para navegar."
+            "Atalhos: Left/Right = frame anterior/proximo, I/O = marcar intervalo.\n"
+            "Ctrl+Scroll = zoom no ponto do cursor; botão direito + arrasto = mover frame.\n"
+            "Scroll = tamanho do brush; miniaturas = clique para navegar.\n"
+            "Use Ocultar painel inferior para ampliar a área ou Segunda tela para outro monitor."
         )
 
     # Media management
@@ -3226,6 +3314,8 @@ class EditorScreen:
             self.frame_canvas.create_image(canvas_width//2, canvas_height//2, image=photo)
             self.frame_canvas.image = photo
             self._draw_retouch_source_marker(info)
+        self._current_display_image = display_img
+        self._schedule_detached_render()
         self._update_dirty_indicator()
 
     def _selection_path_for_frame(self, frame_path):
@@ -3341,18 +3431,39 @@ class EditorScreen:
             self._on_paint_end(event)
 
     def _on_secondary_start(self, event):
-        if getattr(self, "selected_tool", "brush") in {"clone", "heal"}:
-            self._set_retouch_source(event)
-        else:
-            self._on_erase_start(event)
+        self._secondary_pan_start = (event.x, event.y)
+        self._secondary_pan_origin = self.frame_pan
+        self._secondary_dragged = False
+        try:
+            self.frame_canvas.configure(cursor="fleur")
+        except tk.TclError:
+            pass
 
     def _on_secondary_move(self, event):
-        if getattr(self, "selected_tool", "brush") not in {"clone", "heal"}:
-            self._on_erase_move(event)
+        if self._secondary_pan_start is None:
+            return
+        delta_x = event.x - self._secondary_pan_start[0]
+        delta_y = event.y - self._secondary_pan_start[1]
+        if abs(delta_x) + abs(delta_y) < 3 and not self._secondary_dragged:
+            return
+        self._secondary_dragged = True
+        self.frame_pan = (
+            self._secondary_pan_origin[0] + delta_x,
+            self._secondary_pan_origin[1] + delta_y,
+        )
+        self._schedule_frame_redraw(16)
 
     def _on_secondary_end(self, event):
-        if getattr(self, "selected_tool", "brush") not in {"clone", "heal"}:
-            self._on_erase_end(event)
+        try:
+            self.frame_canvas.configure(cursor="")
+        except tk.TclError:
+            pass
+        if (
+            not self._secondary_dragged
+            and getattr(self, "selected_tool", "brush") in {"clone", "heal"}
+        ):
+            self._set_retouch_source(event)
+        self._secondary_pan_start = None
 
     def _start_spatial_selection(self, event, tool):
         info = self.frame_manager.get_current_frame_info() if self.frame_manager else None
@@ -3488,7 +3599,26 @@ class EditorScreen:
     def _load_image(self, frame_path):
         try:
             from PIL import Image
-            return Image.open(frame_path).convert('RGB')
+            stat = os.stat(frame_path)
+            cache_key = (frame_path, stat.st_mtime_ns, stat.st_size)
+            cached = self._frame_image_cache.get(cache_key)
+            if cached is not None:
+                return cached
+            with Image.open(frame_path) as source:
+                image = source.convert('RGB')
+            stale = [key for key in self._frame_image_cache if key[0] == frame_path]
+            for key in stale:
+                self._frame_image_cache.pop(key, None)
+                try:
+                    self._frame_image_cache_order.remove(key)
+                except ValueError:
+                    pass
+            self._frame_image_cache[cache_key] = image
+            self._frame_image_cache_order.append(cache_key)
+            while len(self._frame_image_cache_order) > self._frame_image_cache_max:
+                oldest = self._frame_image_cache_order.pop(0)
+                self._frame_image_cache.pop(oldest, None)
+            return image
         except Exception:
             return None
 
@@ -3496,31 +3626,35 @@ class EditorScreen:
         try:
             from PIL import Image, ImageTk
             img_width, img_height = image.size
+            width = max(1, int(width))
+            height = max(1, int(height))
             if img_width == 0 or img_height == 0:
                 return None
-            aspect_ratio = img_width / img_height
-            if width / height > aspect_ratio:
-                base_height = height
-                base_width = int(height * aspect_ratio)
-            else:
-                base_width = width
-                base_height = int(width / aspect_ratio)
-
-            new_width = int(base_width * self.frame_zoom)
-            new_height = int(base_height * self.frame_zoom)
-            image_resized = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-            # Center crop if zoomed in
-            if new_width > width or new_height > height:
-                left = max(0, (new_width - width) // 2)
-                top = max(0, (new_height - height) // 2)
-                image_resized = image_resized.crop((left, top, left + width, top + height))
-                self._view_offset = (-left, -top)
-            else:
-                self._view_offset = ((width - new_width) // 2, (height - new_height) // 2)
-            self._view_scale = new_width / img_width if img_width else 1.0
-
-            return ImageTk.PhotoImage(image=image_resized)
+            fit_scale = min(width / img_width, height / img_height)
+            scale = max(0.0001, fit_scale * self.frame_zoom)
+            self.frame_pan = clamp_view_pan(
+                (img_width, img_height),
+                (width, height),
+                scale,
+                self.frame_pan,
+            )
+            image_center_x = width / 2.0 + self.frame_pan[0]
+            image_center_y = height / 2.0 + self.frame_pan[1]
+            source_left = img_width / 2.0 - image_center_x / scale
+            source_top = img_height / 2.0 - image_center_y / scale
+            viewport = image.transform(
+                (width, height),
+                Image.Transform.AFFINE,
+                (1.0 / scale, 0, source_left, 0, 1.0 / scale, source_top),
+                resample=Image.Resampling.BICUBIC,
+                fillcolor=(35, 23, 51),
+            )
+            self._view_scale = scale
+            self._view_offset = (
+                image_center_x - img_width * scale / 2.0,
+                image_center_y - img_height * scale / 2.0,
+            )
+            return ImageTk.PhotoImage(image=viewport)
         except Exception:
             return None
 
@@ -3866,10 +4000,169 @@ class EditorScreen:
         ctrl = (event.state & 0x0004) != 0
         delta = 1 if event.delta > 0 else -1
         if ctrl:
-            self.frame_zoom = max(0.25, min(8.0, self.frame_zoom * (1.1 if delta > 0 else 1/1.1)))
-            self.show_current_frame()
+            old_zoom = self.frame_zoom
+            new_zoom = max(
+                0.25,
+                min(8.0, old_zoom * (1.12 if delta > 0 else 1 / 1.12)),
+            )
+            old_scale = max(0.0001, self._view_scale)
+            new_scale = old_scale * (new_zoom / old_zoom)
+            self.frame_pan = anchored_zoom_pan(
+                (self.frame_canvas.winfo_width(), self.frame_canvas.winfo_height()),
+                (event.x, event.y),
+                old_scale,
+                new_scale,
+                self.frame_pan,
+            )
+            self.frame_zoom = new_zoom
+            self._schedule_frame_redraw(35)
         else:
             self.brush_size = max(1, min(200, self.brush_size + delta))
+            if hasattr(self, "brush_size_var"):
+                self.brush_size_var.set(self.brush_size)
+            if hasattr(self, "brush_size_label"):
+                self.brush_size_label.config(text=str(self.brush_size))
+        return "break"
+
+    def _schedule_frame_redraw(self, delay=35):
+        if self._zoom_redraw_job:
+            try:
+                self.root.after_cancel(self._zoom_redraw_job)
+            except Exception:
+                pass
+        self._zoom_redraw_job = self.root.after(delay, self._run_frame_redraw)
+
+    def _run_frame_redraw(self):
+        self._zoom_redraw_job = None
+        self.show_current_frame()
+
+    def reset_frame_view(self):
+        self.frame_zoom = 1.0
+        self.frame_pan = (0.0, 0.0)
+        self._schedule_frame_redraw(0)
+
+    def toggle_frame_bottom_panel(self):
+        if not hasattr(self, "frame_bottom_panel"):
+            return
+        if self._frame_bottom_visible:
+            self.frame_bottom_panel.pack_forget()
+            self._frame_bottom_visible = False
+            self.frame_bottom_toggle_btn.config(text="⌃ Mostrar painel inferior")
+            self.status_var.set("Painel inferior oculto — mais espaço para restauração")
+        else:
+            self.frame_bottom_panel.pack(fill=tk.X)
+            self._frame_bottom_visible = True
+            self.frame_bottom_toggle_btn.config(text="⌄ Ocultar painel inferior")
+        self.root.after_idle(self._run_frame_redraw)
+
+    def open_detached_frame_viewer(self):
+        if self._detached_viewer is not None:
+            try:
+                self._detached_viewer.deiconify()
+                self._detached_viewer.lift()
+                self._detached_viewer.focus_force()
+                return
+            except tk.TclError:
+                self._detached_viewer = None
+        window = tk.Toplevel(self.root)
+        window.title("Benedito Digital — Frame em segunda tela")
+        window.geometry("1100x720")
+        window.minsize(520, 360)
+        window.configure(bg=DarkTheme.COLORS['bg_primary'])
+        window.protocol("WM_DELETE_WINDOW", self._close_detached_frame_viewer)
+        window.bind("<F11>", lambda _event: self._toggle_detached_fullscreen())
+
+        header = tk.Frame(window, bg=DarkTheme.COLORS['bg_secondary'])
+        header.pack(fill=tk.X)
+        tk.Label(
+            header,
+            text="Visualização duplicada — arraste esta janela para outro monitor",
+            bg=DarkTheme.COLORS['bg_secondary'],
+            fg=DarkTheme.COLORS['text_secondary'],
+            font=DarkTheme.FONTS['small'],
+        ).pack(side=tk.LEFT, padx=12, pady=8)
+        tk.Button(
+            header,
+            text="Tela cheia (F11)",
+            command=self._toggle_detached_fullscreen,
+            bg=DarkTheme.COLORS['bg_tertiary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            relief=tk.FLAT,
+            padx=10,
+            pady=4,
+        ).pack(side=tk.RIGHT, padx=8, pady=5)
+        canvas = tk.Canvas(
+            window,
+            bg=DarkTheme.COLORS['player_bg'],
+            highlightthickness=0,
+        )
+        canvas.pack(fill=tk.BOTH, expand=True)
+        canvas.bind("<Configure>", lambda _event: self._schedule_detached_render())
+        self._detached_viewer = window
+        self._detached_canvas = canvas
+        self._schedule_detached_render(0)
+
+    def _toggle_detached_fullscreen(self):
+        if self._detached_viewer is None:
+            return
+        try:
+            current = bool(self._detached_viewer.attributes("-fullscreen"))
+            self._detached_viewer.attributes("-fullscreen", not current)
+        except tk.TclError:
+            pass
+
+    def _close_detached_frame_viewer(self):
+        if self._detached_render_job:
+            try:
+                self.root.after_cancel(self._detached_render_job)
+            except Exception:
+                pass
+        self._detached_render_job = None
+        if self._detached_viewer is not None:
+            try:
+                self._detached_viewer.destroy()
+            except tk.TclError:
+                pass
+        self._detached_viewer = None
+        self._detached_canvas = None
+
+    def _schedule_detached_render(self, delay=30):
+        if self._detached_viewer is None or self._detached_canvas is None:
+            return
+        if self._detached_render_job:
+            try:
+                self.root.after_cancel(self._detached_render_job)
+            except Exception:
+                pass
+        self._detached_render_job = self.root.after(
+            delay, self._render_detached_frame
+        )
+
+    def _render_detached_frame(self):
+        self._detached_render_job = None
+        if self._detached_canvas is None or self._current_display_image is None:
+            return
+        try:
+            from PIL import Image, ImageTk
+
+            width = max(1, self._detached_canvas.winfo_width())
+            height = max(1, self._detached_canvas.winfo_height())
+            image = self._current_display_image.copy()
+            image.thumbnail((width, height), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(image)
+            self._detached_canvas.delete("all")
+            self._detached_canvas.create_image(
+                width // 2, height // 2, image=photo, anchor=tk.CENTER
+            )
+            self._detached_canvas.image = photo
+            if self.frame_manager:
+                info = self.frame_manager.get_current_frame_info()
+                if info and self._detached_viewer is not None:
+                    self._detached_viewer.title(
+                        f"Benedito Digital — Frame {info['index'] + 1} / {info['total']}"
+                    )
+        except (tk.TclError, OSError):
+            pass
 
     # Undo/Redo
     def _read_bytes(self, path):
@@ -4033,9 +4326,12 @@ class EditorScreen:
                 self.frame_counter.config(text=f"Frame {info['index'] + 1} / {info['total']}")
                 try:
                     self.frame_slider.configure(to=info['total'])
+                    self._updating_frame_slider = True
                     self.frame_slider_var.set(info['index'] + 1)
                 except Exception:
                     pass
+                finally:
+                    self._updating_frame_slider = False
                 try:
                     if int(self.range_end_entry.get() or "0") <= 1:
                         self.range_end_entry.delete(0, tk.END)
@@ -4256,8 +4552,13 @@ class EditorScreen:
         total = len(frames)
         zoom = self.filmstrip_zoom_var.get() if hasattr(self, "filmstrip_zoom_var") else 1.0
         thumb_h = int(90 * max(0.6, min(2.5, float(zoom))))
-        step = max(1, total // 200)
-        signature = (total, thumb_h, step)
+        current_info = self.frame_manager.get_current_frame_info()
+        if current_info and current_info.get("height"):
+            self._filmstrip_aspect_ratio = (
+                current_info["width"] / current_info["height"]
+            )
+        indices = filmstrip_window_indices(total, center_index, limit=11)
+        signature = (total, thumb_h, tuple(indices))
 
         if signature != self._filmstrip_signature:
             self.filmstrip_canvas.delete("all")
@@ -4266,7 +4567,6 @@ class EditorScreen:
             self._filmstrip_positions = {}
             self._filmstrip_indices = []
 
-            indices = list(range(0, total, step))
             self._filmstrip_indices = indices
 
             x = 10
@@ -4313,6 +4613,22 @@ class EditorScreen:
                 except Exception:
                     pass
         self._draw_timeline_annotations(thumb_h)
+
+    def _schedule_filmstrip_update(self, delay=120):
+        if self._filmstrip_update_job:
+            try:
+                self.root.after_cancel(self._filmstrip_update_job)
+            except Exception:
+                pass
+        self._filmstrip_update_job = self.root.after(
+            delay, self._run_filmstrip_update
+        )
+
+    def _run_filmstrip_update(self):
+        self._filmstrip_update_job = None
+        center = self.frame_manager.current_frame_index if self.frame_manager else 0
+        self._filmstrip_signature = None
+        self._update_filmstrip(center)
 
     def _draw_timeline_annotations(self, thumb_h):
         self.filmstrip_canvas.delete("annotation")
@@ -4388,7 +4704,12 @@ class EditorScreen:
         cache_dir = self._get_filmstrip_cache_dir(thumb_h)
         cache_path = None
         if cache_dir:
-            cache_path = os.path.join(cache_dir, os.path.basename(path) + ".jpg")
+            source_id = hashlib.sha1(
+                os.path.abspath(path).encode("utf-8", errors="surrogatepass")
+            ).hexdigest()[:12]
+            cache_path = os.path.join(
+                cache_dir, f"{source_id}-{os.path.basename(path)}.jpg"
+            )
 
         try:
             from PIL import Image, ImageTk
@@ -4400,17 +4721,21 @@ class EditorScreen:
                 except Exception:
                     img = None
             if img is None:
-                img = Image.open(path).convert("RGB")
-                w, h = img.size
-                if h == 0:
-                    return None
-                thumb_w = int((w / h) * thumb_h)
-                img = img.resize((thumb_w, thumb_h), Image.Resampling.LANCZOS)
-                if cache_path:
-                    try:
-                        img.save(cache_path, "JPEG", quality=88)
-                    except Exception:
-                        pass
+                self._queue_filmstrip_thumbnail(
+                    path, thumb_h, src_mtime, cache_path
+                )
+                aspect = getattr(self, "_filmstrip_aspect_ratio", 16 / 9)
+                thumb_w = max(1, int(aspect * thumb_h))
+                placeholder = self._filmstrip_placeholder_cache.get(
+                    (thumb_w, thumb_h)
+                )
+                if placeholder is None:
+                    placeholder_image = Image.new(
+                        "RGB", (thumb_w, thumb_h), DarkTheme.COLORS['bg_tertiary']
+                    )
+                    placeholder = ImageTk.PhotoImage(placeholder_image)
+                    self._filmstrip_placeholder_cache[(thumb_w, thumb_h)] = placeholder
+                return placeholder, thumb_w
             else:
                 thumb_w = img.size[0]
 
@@ -4427,6 +4752,64 @@ class EditorScreen:
             return photo, thumb_w
         except Exception:
             return None
+
+    def _queue_filmstrip_thumbnail(self, path, thumb_h, src_mtime, cache_path):
+        if not cache_path:
+            return
+        key = (path, thumb_h, src_mtime)
+        with self._thumb_generation_lock:
+            if key in self._thumb_generation_pending:
+                return
+            self._thumb_generation_pending.add(key)
+        self._thumb_generation_queue.put((key, cache_path))
+
+    def _filmstrip_thumb_worker(self):
+        from PIL import Image
+
+        while not self._thumb_worker_stop.is_set():
+            try:
+                key, cache_path = self._thumb_generation_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            path, thumb_h, _src_mtime = key
+            try:
+                with Image.open(path) as source:
+                    image = source.convert("RGB")
+                if image.height <= 0:
+                    continue
+                thumb_w = max(1, int((image.width / image.height) * thumb_h))
+                image = image.resize(
+                    (thumb_w, thumb_h), Image.Resampling.LANCZOS
+                )
+                temporary = cache_path + ".tmp"
+                image.save(temporary, "JPEG", quality=88)
+                os.replace(temporary, cache_path)
+            except Exception:
+                try:
+                    os.remove(cache_path + ".tmp")
+                except OSError:
+                    pass
+            finally:
+                self._thumb_generation_queue.task_done()
+                self._thumb_ready_queue.put(key)
+
+    def _drain_thumb_ready(self):
+        refreshed = False
+        while True:
+            try:
+                key = self._thumb_ready_queue.get_nowait()
+            except queue.Empty:
+                break
+            with self._thumb_generation_lock:
+                self._thumb_generation_pending.discard(key)
+            refreshed = True
+        if refreshed:
+            self._filmstrip_signature = None
+            self._schedule_filmstrip_update(20)
+        try:
+            self._thumb_ready_job = self.root.after(50, self._drain_thumb_ready)
+        except tk.TclError:
+            self._thumb_ready_job = None
 
     def _on_filmstrip_click(self, event):
         if not self._filmstrip_map:
@@ -4464,7 +4847,24 @@ class EditorScreen:
             index = int(float(value)) - 1
         except Exception:
             return
-        if self.frame_manager and self.frame_manager.go_to_frame(index):
+        if self._updating_frame_slider:
+            return
+        if self._slider_navigation_job:
+            try:
+                self.root.after_cancel(self._slider_navigation_job)
+            except Exception:
+                pass
+        self._slider_navigation_job = self.root.after(
+            70, lambda target=index: self._run_slider_navigation(target)
+        )
+
+    def _run_slider_navigation(self, index):
+        self._slider_navigation_job = None
+        if (
+            self.frame_manager
+            and index != self.frame_manager.current_frame_index
+            and self.frame_manager.go_to_frame(index)
+        ):
             self.show_current_frame()
             self.update_frame_counter()
 
@@ -4496,13 +4896,13 @@ class EditorScreen:
             else:
                 btn.configure(bg=DarkTheme.COLORS['bg_tertiary'], fg=DarkTheme.COLORS['text_primary'])
         instructions = {
-            "clone": "Clone: botão direito define a fonte; arraste o esquerdo para copiar textura.",
-            "heal": "Healing: botão direito define a fonte; arraste o esquerdo para integrar textura e cor.",
-            "brush": "Pincel: arraste para marcar a área que será restaurada.",
-            "erase": "Borracha: arraste para remover partes da máscara manual.",
+            "clone": "Clone: clique direito define a fonte; arraste o direito para mover a imagem.",
+            "heal": "Healing: clique direito define a fonte; arraste o direito para mover a imagem.",
+            "brush": "Pincel: arraste para marcar; botão direito + arrasto move a imagem.",
+            "erase": "Borracha: arraste para apagar; botão direito + arrasto move a imagem.",
             "select_rect": "Retângulo: arraste para limitar filtros e retoques à seleção.",
             "select_lasso": "Laço: contorne livremente a área desejada.",
-            "select": "Selecionar: navegação sem alterar o frame.",
+            "select": "Selecionar: botão direito + arrasto move o frame ampliado.",
         }
         if hasattr(self, "selection_status_var") and tool_id in instructions:
             self.selection_status_var.set(instructions[tool_id])
@@ -6628,6 +7028,10 @@ class EditorScreen:
         try:
             if self._active_job_id:
                 self.job_manager.cancel(self._active_job_id)
+            self._thumb_worker_stop.set()
+            if self._thumb_ready_job:
+                self.root.after_cancel(self._thumb_ready_job)
+                self._thumb_ready_job = None
             if self.progress_dialog:
                 self.progress_dialog.close()
             # Save project state

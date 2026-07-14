@@ -72,6 +72,22 @@ class DarkTheme:
 
         # Configure ttk styles
         cls.configure_ttk_styles(style)
+        cls.configure_combobox_palette(root)
+
+    @classmethod
+    def configure_combobox_palette(cls, root, *, high_contrast=False):
+        """Apply readable colors to both the combobox field and popup list."""
+        background = "#000000" if high_contrast else cls.COLORS['bg_tertiary']
+        foreground = "#ffffff" if high_contrast else cls.COLORS['text_primary']
+        selected = "#ffffff" if high_contrast else cls.COLORS['accent_primary']
+        selected_text = "#000000" if high_contrast else cls.COLORS['text_inverse']
+        for pattern, value in (
+            ("*TCombobox*Listbox.background", background),
+            ("*TCombobox*Listbox.foreground", foreground),
+            ("*TCombobox*Listbox.selectBackground", selected),
+            ("*TCombobox*Listbox.selectForeground", selected_text),
+        ):
+            root.option_add(pattern, value)
 
     @classmethod
     def apply_accessibility(cls, root, preferences):
@@ -99,7 +115,25 @@ class DarkTheme:
             )
         style.configure("TButton", focuscolor=focus, focusthickness=3 if preferences.large_focus else 1)
         style.configure("TEntry", fieldbackground=background, foreground=foreground, insertcolor=focus)
-        style.configure("TCombobox", fieldbackground=background, foreground=foreground)
+        style.configure(
+            "TCombobox",
+            background=background,
+            fieldbackground=background,
+            foreground=foreground,
+            selectbackground=focus,
+            selectforeground="#000000" if preferences.high_contrast else cls.COLORS['text_inverse'],
+            arrowcolor=foreground,
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", background)],
+            foreground=[("readonly", foreground)],
+            selectbackground=[("readonly", focus)],
+            selectforeground=[
+                ("readonly", "#000000" if preferences.high_contrast else cls.COLORS['text_inverse'])
+            ],
+        )
+        cls.configure_combobox_palette(root, high_contrast=preferences.high_contrast)
 
     @classmethod
     def configure_ttk_styles(cls, style):
@@ -173,15 +207,38 @@ class DarkTheme:
                  focuscolor=[('focus', cls.COLORS['accent_primary'])])
 
         # Combobox styles
+        style.configure(
+            'TCombobox',
+            background=cls.COLORS['bg_tertiary'],
+            fieldbackground=cls.COLORS['bg_tertiary'],
+            foreground=cls.COLORS['text_primary'],
+            selectbackground=cls.COLORS['accent_primary'],
+            selectforeground=cls.COLORS['text_inverse'],
+            arrowcolor=cls.COLORS['text_secondary'],
+        )
+        style.map(
+            'TCombobox',
+            background=[('readonly', cls.COLORS['bg_tertiary'])],
+            fieldbackground=[('readonly', cls.COLORS['bg_tertiary'])],
+            foreground=[('readonly', cls.COLORS['text_primary'])],
+            selectbackground=[('readonly', cls.COLORS['accent_primary'])],
+            selectforeground=[('readonly', cls.COLORS['text_inverse'])],
+        )
         style.configure('Dark.TCombobox',
                       background=cls.COLORS['bg_tertiary'],
+                      fieldbackground=cls.COLORS['bg_tertiary'],
                       foreground=cls.COLORS['text_primary'],
+                      selectbackground=cls.COLORS['accent_primary'],
+                      selectforeground=cls.COLORS['text_inverse'],
                       font=cls.FONTS['body'],
                       borderwidth=1,
                       arrowcolor=cls.COLORS['text_secondary'])
         style.map('Dark.TCombobox',
                  background=[('readonly', cls.COLORS['bg_tertiary'])],
-                 foreground=[('readonly', cls.COLORS['text_primary'])])
+                 fieldbackground=[('readonly', cls.COLORS['bg_tertiary'])],
+                 foreground=[('readonly', cls.COLORS['text_primary'])],
+                 selectbackground=[('readonly', cls.COLORS['accent_primary'])],
+                 selectforeground=[('readonly', cls.COLORS['text_inverse'])])
 
         # Notebook (tabs) styles
         style.configure('Dark.TNotebook',
