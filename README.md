@@ -33,6 +33,10 @@ A branch `develop` concentra a validação da próxima versão. A fundação atu
 - merge local com comparação lado a lado e mapa de diferenças por frame;
 - histórico de pinceladas, máscaras, transformações e resets por frame;
 - clone e healing no canvas, limitáveis por seleção e auditáveis por branch;
+- pincel e borracha contínuos, com raio ajustável e gravação ao concluir o traço;
+- detecção conservadora de sujeira transitória com correção explícita e máscara descartável;
+- intervalos reutilizáveis por cena ou posição de câmera;
+- placa limpa de fundo estático com proteção de pessoas e objetos em movimento;
 - armazenamento deduplicado de artefatos por conteúdo;
 - restauração e filtros por intervalo com progresso real;
 - detecção e alinhamento de película pelas perfurações laterais;

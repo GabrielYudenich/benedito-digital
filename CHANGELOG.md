@@ -30,6 +30,9 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - zoom ancorado no cursor, pan com botão direito e render somente do viewport visível;
 - painel inferior recolhível e visualização duplicada para um segundo monitor;
 - ícones nas ferramentas de seleção, pintura, borracha, clone e healing.
+- intervalos reutilizáveis por cena ou posição de câmera, com detecção automática de cortes;
+- placa limpa para câmera estática, com fundo mediano e proteção de foreground;
+- menu de sujeira automática com detecção, correção, ocultação e remoção por frame.
 
 ### Alterado
 
@@ -37,6 +40,8 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - projetos grandes passam a usar proxies, chunks, checkpoints e deduplicação;
 - versão interna elevada para `1.1.0` como candidata de pré-lançamento.
 - frames de fontes diferentes passam a usar diretórios separados.
+- pincel e borracha passam a interpolar o traço, respeitar o raio e salvar apenas ao soltar;
+- o controle das miniaturas permanece visível junto à navegação entre problemas.
 
 ### Segurança
 

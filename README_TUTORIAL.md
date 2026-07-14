@@ -35,7 +35,8 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 1. Use `Ctrl + roda do mouse` para ampliar a região sob o cursor.
 2. Segure o botão direito e arraste para mover o frame ampliado.
 3. Use `Ajustar` para voltar à imagem inteira.
-4. Use `Ocultar painel inferior` para maximizar a área de restauração.
+4. Use `Ocultar miniaturas`, ao lado da navegação de problemas, para maximizar a área
+   de restauração sem perder as marcações do frame.
 5. Use `Segunda tela` para duplicar o frame em uma janela independente, movê-la para
    outro monitor e alternar tela cheia com `F11`.
 
@@ -43,45 +44,59 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 1. Vá para a aba `Frames`.
 2. Use as setas do teclado para navegar.
 3. Use `I` para início de intervalo e `O` para fim.
-4. Edite com o brush e máscara quando necessário.
+4. Edite com `Pincel` e `Borracha`; o controle `Brush` altera o raio real do traço.
 5. Em `Clone` ou `Healing`, clique com o botão direito para definir a fonte azul.
 6. Arraste com o botão esquerdo sobre a sujeira; uma seleção ativa limita o retoque.
 7. `Clone` copia a textura exatamente; `Healing` adapta luminosidade e cor ao destino.
 8. Cada traço, Undo e Redo permanece registrado na branch sem alterar o original.
+9. Em `Auto sujeira`, primeiro detecte os pontos amarelos e depois escolha
+   `Corrigir pontos detectados`. Também é possível ocultar ou apagar a detecção do frame.
 
-**5. Restaurar**
+**5. Separar cenas e construir uma placa limpa**
+1. Defina um intervalo com `I` e `O` e abra `Cenas/câmeras` na barra inferior.
+2. Salve o intervalo atual ou use a detecção automática de cortes. Ao escolher um
+   segmento, estabilização, filtros, restauração e placa limpa passam a usar esse trecho.
+3. Em uma cena de câmera estática, clique em `Placa limpa`.
+4. O Benedito alinha amostras, calcula um fundo mediano e mede se a câmera realmente
+   permaneceu estática antes de alterar qualquer frame.
+5. A aplicação usa somente sujeiras pequenas no fundo estável. Rostos, braços e outros
+   movimentos grandes são protegidos e permanecem no frame original.
+6. Se a câmera se mover além do limite seguro, a placa é preservada para inspeção, mas
+   não é aplicada automaticamente. Estabilize ou reduza o segmento e tente novamente.
+
+**6. Restaurar**
 1. Ajuste o `Preset Global` e o `Perfil`.
 2. Selecione o modelo em `Modelo ML` (DnCNN, SwinIR, Restormer).
 3. Clique em `Restaurar frame atual` ou `Restaurar intervalo`.
 
-**6. Upscale (Super-Resolution)**
+**7. Upscale (Super-Resolution)**
 1. Escolha o engine (`RRDB` ou `SwinIR SR`).
 2. Selecione o peso e a escala (`x2` ou `x4`).
 3. Execute `Upscale frame atual` ou `Upscale intervalo`.
 4. Use `Ver upscale` para comparar.
 
-**7. Preview e render**
+**8. Preview e render**
 1. Clique em `Preview` para gerar um trecho.
 2. Clique em `Renderizar vídeo restaurado` para exportar.
 
-**8. Gerenciar modelos**
+**9. Gerenciar modelos**
 1. Na tela inicial, abra `Configurações`.
 2. Use o `Gerenciador de Modelos` para adicionar ou remover pesos custom.
 3. No editor, também existe o botão `Adicionar peso (.pth)` para facilitar.
 
-**9. Película e perfurações**
+**10. Película e perfurações**
 1. Selecione o intervalo na aba de frames.
 2. Abra `Fluxos > Analisar danos nos frames` para criar marcações.
 3. Use `Fluxos > Alinhar película pelas perfurações` para corrigir o registro.
 4. Frames sem confiança suficiente permanecem intactos para revisão humana.
 
-**10. Trabalhar em equipe**
+**11. Trabalhar em equipe**
 1. Abra `Versionamento > Colaboração da equipe`.
 2. Escolha uma pasta local, NAS ou sincronizada.
 3. Use `Push` para publicar a branch ativa e `Pull` para trazer a branch do colega.
 4. Compare e faça o merge pelo gerenciador visual de branches.
 
-**11. Timeline e scopes**
+**12. Timeline e scopes**
 1. Abra `Editar > Timeline multipista` para adicionar, cortar, mover e sobrepor clipes.
 2. Selecione um clipe e use `Keyframes` para animar propriedades.
 3. Use `Exibir > Scopes de cor` para histograma, waveform e vectorscope.

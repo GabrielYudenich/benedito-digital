@@ -76,6 +76,16 @@ ao frame original, mantendo a acao reversivel.
 Pinceladas registram pontos, ferramenta, raio e valor da mascara. Ao final do traco, a
 mascara PNG exata tambem e armazenada como objeto, preservando edicao e reproducao fiel.
 
+Segmentos de cena e posicao de camera ficam em `metadata/camera_segments.json`, separados
+por fonte. Eles guardam nome, primeiro frame, ultimo frame e confianca da sugestao. O arquivo
+e pequeno e pode ser compartilhado sem copiar a sequencia de imagens.
+
+Placas limpas ficam no worktree da branch em `clean_plates/<id>/`. Cada placa possui o fundo
+mediano e a mascara das regioes estaveis. As operacoes `clean_plate.build` e
+`clean_plate.apply` registram intervalo, diagnosticos, protecao de foreground e hashes dos
+frames realmente modificados. `auto_dust.repair` registra a mascara automatica e o frame
+resultante; limpar os pontos visuais nao altera o original.
+
 ## Processamento em chunks
 
 Filtros e restauracoes por intervalo sao divididos em chunks de frames. Cada chunk so e

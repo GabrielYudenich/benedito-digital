@@ -64,3 +64,14 @@ O zoom renderiza apenas o viewport visível, em vez de criar uma imagem ampliada
 memória. `Ctrl + roda` ancora o zoom no cursor e botão direito + arrasto move a imagem. O
 painel inferior pode ser recolhido, e `Segunda tela` abre uma visualização independente para
 monitores adicionais.
+
+## Cenas e placa limpa
+
+A detecção de cenas lê no máximo cerca de mil miniaturas distribuídas pela sequência e
+refina somente os cortes candidatos. Ela não carrega todos os frames de um filme longo na
+memória. Os intervalos salvos podem ser reutilizados por estabilização, filtros e restauração.
+
+A placa limpa usa no máximo 15 amostras do intervalo para construir o fundo mediano. Ao
+aplicar, somente o frame atual, os dois vizinhos, a placa e as máscaras ficam na memória.
+Objetos grandes que diferem do fundo são tratados como foreground protegido. Por segurança,
+uma câmera considerada móvel impede a aplicação automática e mantém os frames intactos.
