@@ -2,6 +2,8 @@ import os
 import sys
 from pathlib import Path
 
+import cv2
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT / "src"
@@ -79,3 +81,24 @@ def test_progress_parser_matches_ffmpeg_machine_output():
     assert VideoRenderer._parse_progress_time("out_time_us", "1500000") == 1.5
     assert VideoRenderer._parse_progress_time("out_time", "00:00:02.250") == 2.25
     assert VideoRenderer._parse_progress_time("frame", "10") is None
+
+
+def test_stabilization_stops_before_writing_when_cancelled(tmp_path):
+    frames_dir = tmp_path / "frames"
+    output_dir = tmp_path / "output"
+    frames_dir.mkdir()
+    image = np.zeros((32, 48, 3), dtype=np.uint8)
+    assert cv2.imwrite(str(frames_dir / "frame_000001.png"), image)
+
+    renderer = VideoRenderer(use_gpu=False)
+    try:
+        success = renderer.stabilize_frames_ecc(
+            str(frames_dir),
+            str(output_dir),
+            cancel_callback=lambda: True,
+        )
+    finally:
+        renderer.cleanup_temp_directory(log_messages=False)
+
+    assert success is False
+    assert not list(output_dir.glob("*.png"))

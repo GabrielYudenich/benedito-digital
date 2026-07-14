@@ -38,7 +38,7 @@ from core.paths import default_models_dir, resource_root
 from core.media_browser import paginate_frame_files
 from core.selections import polygon_mask, rectangle_mask, selection_bounds
 from core.storage import estimate_lossless_frames_bytes, require_free_space
-from core.shortcuts import ShortcutPreferences
+from core.shortcuts import ShortcutPreferences, shortcut_matches_event
 from core.accessibility import AccessibilityPreferences
 from core.camera_segments import CameraSegment, CameraSegmentStore, detect_camera_segments
 from core.clean_plate import (
@@ -64,6 +64,7 @@ from gui.dialogs.import_video_dialog import ImportModeDialog, ImportVideoDialog
 from gui.dialogs.export_dialog import ExportDialog
 from gui.dialogs.ffmpeg_config import FFmpegConfigDialog
 from gui.dialogs.model_registry_dialog import ModelRegistryDialog
+from gui.dialogs.operation_scope_dialog import OperationScopeDialog
 from gui.dialogs.progress_dialog import TaskProgressDialog
 from gui.dialogs.proxy_dialog import ProxyDialog
 from gui.dialogs.restoration_workflow_dialog import RestorationWorkflowDialog, VHSProcessingDialog
@@ -206,14 +207,30 @@ class EditorScreen:
         self._frame_image_cache = {}
         self._frame_image_cache_order = []
         self._frame_image_cache_max = 8
+        self._review_preview_cache = {}
+        self._review_preview_order = []
+        self._review_preview_cache_max = 24
+        self._review_preview_lock = threading.RLock()
+        self._review_prefetch_queue = queue.PriorityQueue()
+        self._review_prefetch_pending = set()
+        self._review_prefetch_generation = 0
+        self._review_prefetch_stop = threading.Event()
+        self._review_prefetch_workers = []
+        self._frame_review_buffering = False
+        self._frame_review_buffer_deadline = None
+        self._review_result_dir = None
+        self._review_preview_size = (1280, 720)
         self._current_display_image = None
         self._detached_viewer = None
         self._detached_canvas = None
         self._detached_render_job = None
         self._detached_view_mode = "compare"
         self._detached_audio_active = False
+        self._detached_audio_pending = False
         self._properties_window = None
         self._bound_shortcut_sequences = set()
+        self._shortcut_binding_id = None
+        self._shortcut_callbacks = {}
         self._frame_bottom_visible = True
         self._updating_frame_slider = False
         self._frame_review_playing = False
@@ -237,6 +254,7 @@ class EditorScreen:
         self._pending_playback_finished = False
         self._playback_ui_job = None
         self._models_last_mtime = 0
+        self._proxy_playback_prompted = set()
         self._status_anim_job = None
         self._status_anim_phase = 0
         cache_root = str(self.workspace.cache_dir) if self.workspace else os.path.join(self.project_manager.current_project_path, "cache")
@@ -247,6 +265,14 @@ class EditorScreen:
             daemon=True,
         )
         self._thumb_worker.start()
+        for worker_number in range(4):
+            worker = threading.Thread(
+                target=self._review_prefetch_worker,
+                name=f"benedito-review-prefetch-{worker_number + 1}",
+                daemon=True,
+            )
+            worker.start()
+            self._review_prefetch_workers.append(worker)
 
         # Initialize new components
         self.project_state = ProjectStateManager(self.project_manager.current_project_path)
@@ -723,7 +749,13 @@ class EditorScreen:
             except tk.TclError:
                 pass
         self._bound_shortcut_sequences.clear()
-        callbacks = {
+        if self._shortcut_binding_id is not None:
+            try:
+                self.root.unbind("<KeyPress>", self._shortcut_binding_id)
+            except tk.TclError:
+                pass
+            self._shortcut_binding_id = None
+        self._shortcut_callbacks = {
             "previous_frame": self.previous_frame,
             "next_frame": self.next_frame,
             "first_frame": self.first_frame,
@@ -752,17 +784,28 @@ class EditorScreen:
             "useful_end": self.set_useful_end_here,
             "help": self.show_help_dialog,
         }
-        for action, callback in callbacks.items():
-            sequence = self.shortcut_preferences.sequence(action)
-            if not sequence:
-                continue
-            self.root.bind(
-                sequence,
-                lambda event, command=callback: self._navigation_shortcut(
-                    event, command
-                ),
-            )
-            self._bound_shortcut_sequences.add(sequence)
+        self._shortcut_binding_id = self.root.bind(
+            "<KeyPress>", self._dispatch_shortcut_event, add="+"
+        )
+
+    def _dispatch_shortcut_event(self, event):
+        if event.widget.winfo_class() in {
+            "Entry",
+            "TEntry",
+            "Text",
+            "TCombobox",
+            "Spinbox",
+            "TSpinbox",
+        }:
+            return None
+        for action, callback in self._shortcut_callbacks.items():
+            shortcut = self.shortcut_preferences.get(action)
+            if shortcut and shortcut_matches_event(
+                shortcut, event.keysym, int(event.state or 0)
+            ):
+                callback()
+                return "break"
+        return None
 
     def open_shortcut_settings(self):
         ShortcutSettingsDialog(
@@ -3132,8 +3175,11 @@ class EditorScreen:
         return job
 
     def _show_progress_dialog(self):
-        if self.progress_dialog:
-            self.progress_dialog.show()
+        if self.progress_dialog and self.progress_dialog.show():
+            return
+        self.progress_dialog = None
+        if hasattr(self, "show_job_btn"):
+            self.show_job_btn.config(state=tk.DISABLED, text="Ver tarefa")
 
     def _poll_active_job(self):
         job_id = self._active_job_id
@@ -3163,6 +3209,22 @@ class EditorScreen:
         self._active_job_id = None
         if hasattr(self, "cancel_job_btn"):
             self.cancel_job_btn.config(state=tk.DISABLED)
+        self.progress_var_main.set(0)
+        if hasattr(self, "restore_progress_var"):
+            self.restore_progress_var.set(0)
+        if hasattr(self, "status_progress"):
+            self.status_progress["value"] = 0
+        if hasattr(self, "status_percent_var"):
+            self.status_percent_var.set("0%")
+        self._stop_status_animation()
+        if hasattr(self, "show_job_btn"):
+            dialog_exists = bool(
+                self.progress_dialog and self.progress_dialog.exists()
+            )
+            self.show_job_btn.config(
+                state=tk.NORMAL if dialog_exists else tk.DISABLED,
+                text="Ver resultado" if dialog_exists else "Ver tarefa",
+            )
         if finished_callback:
             finished_callback()
 
@@ -3974,17 +4036,19 @@ class EditorScreen:
     def _render_video_frame(self, frame):
         from PIL import Image, ImageTk
 
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         canvas_width = self.video_canvas.winfo_width()
         canvas_height = self.video_canvas.winfo_height()
         if canvas_width <= 1 or canvas_height <= 1:
             return
-        source_height, source_width = frame_rgb.shape[:2]
+        source_height, source_width = frame.shape[:2]
         scale = min(canvas_width / source_width, canvas_height / source_height)
         target_width = max(1, int(source_width * scale))
         target_height = max(1, int(source_height * scale))
-        frame_resized = cv2.resize(frame_rgb, (target_width, target_height))
-        image = Image.fromarray(frame_resized)
+        interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        frame_resized = cv2.resize(
+            frame, (target_width, target_height), interpolation=interpolation
+        )
+        image = Image.fromarray(cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB))
         photo = ImageTk.PhotoImage(image=image)
         self.video_canvas.delete("all")
         self.video_canvas.create_image(
@@ -4035,6 +4099,8 @@ class EditorScreen:
             return
 
         if not self.is_playing:
+            if self._offer_proxy_for_smooth_playback():
+                return
             self.is_playing = True
             self.play_btn.config(text="⏸️")
             self._start_play_pulse()
@@ -4047,6 +4113,37 @@ class EditorScreen:
         else:
             self.video_player.stop_playback()
             self._finish_playback_ui()
+
+    def _offer_proxy_for_smooth_playback(self):
+        if not self.current_video or not self.workspace:
+            return False
+        if self.workspace.get_proxy_path(self.current_video):
+            return False
+        original_path = self._original_video_path()
+        if not original_path or not os.path.isfile(original_path):
+            return False
+        try:
+            heavy_source = os.path.getsize(original_path) >= 512 * 1024 * 1024
+        except OSError:
+            return False
+        if not heavy_source or self.current_video in self._proxy_playback_prompted:
+            return False
+        self._proxy_playback_prompted.add(self.current_video)
+        if messagebox.askyesno(
+            "Criar proxy para reprodução fluida?",
+            "Este material é grande e está sendo decodificado diretamente do arquivo "
+            "de preservação. Mesmo em computadores rápidos, codecs lossless podem "
+            "engasgar no preview.\n\n"
+            "Deseja criar agora um proxy leve para reprodução? O original e os frames "
+            "permanecem intactos e o render final nunca usa o proxy.",
+            parent=self.root,
+        ):
+            self.open_proxy_dialog(self.current_video)
+            return True
+        self.status_var.set(
+            "Reprodução direta pelo original; crie um proxy se houver travamentos"
+        )
+        return False
 
     def _finish_playback_ui(self):
         self.is_playing = False
@@ -4625,7 +4722,10 @@ class EditorScreen:
         try:
             from PIL import Image
             w, h = original_img.size
-            restored_img = restored_img.resize((w, h), Image.Resampling.LANCZOS)
+            if restored_img.size != (w, h):
+                restored_img = restored_img.resize(
+                    (w, h), Image.Resampling.BILINEAR
+                )
             split = int(w * (ratio / 100.0))
             left = original_img.crop((0, 0, split, h))
             right = restored_img.crop((split, 0, w, h))
@@ -5128,9 +5228,10 @@ class EditorScreen:
             textvariable=self._detached_counter_var,
             bg=DarkTheme.COLORS['bg_secondary'],
             fg=DarkTheme.COLORS['text_primary'],
-            font=DarkTheme.FONTS['mono'],
-            anchor=tk.W,
-        ).pack(fill=tk.X, padx=10, pady=7)
+            font=("Consolas", 14, "bold"),
+            anchor=tk.CENTER,
+            justify=tk.CENTER,
+        ).pack(fill=tk.X, padx=10, pady=10)
         self._detached_viewer = window
         self._detached_canvas = canvas
         self._schedule_detached_render(0)
@@ -5163,12 +5264,8 @@ class EditorScreen:
             self._detached_speed_var.set(speed)
             self.status_var.set("Áudio da segunda tela usa velocidade 1x")
         self.frame_review_speed_var.set(speed)
+        self._detached_audio_pending = bool(self._detached_audio_var.get())
         self.start_frame_review(1)
-        if self._detached_audio_var.get() and self._frame_review_playing:
-            self.video_player.current_frame = self.frame_manager.current_frame_index
-            self.video_player.audio_enabled = True
-            self.video_player._start_audio_playback()
-            self._detached_audio_active = True
         self._sync_detached_play_button()
 
     def _stop_detached_playback(self):
@@ -5181,13 +5278,22 @@ class EditorScreen:
         if self._detached_audio_var.get():
             self._detached_speed_var.set("1x")
             self.frame_review_speed_var.set("1x")
-            self.video_player.current_frame = self.frame_manager.current_frame_index
-            self.video_player.audio_enabled = True
-            self.video_player._start_audio_playback()
-            self._detached_audio_active = True
+            self._detached_audio_pending = True
+            if not self._frame_review_buffering:
+                self._start_detached_audio_after_buffer()
         else:
             self.video_player._stop_audio_playback()
             self._detached_audio_active = False
+            self._detached_audio_pending = False
+
+    def _start_detached_audio_after_buffer(self):
+        if not getattr(self, "_detached_audio_pending", False) or not self._frame_review_playing:
+            return
+        self.video_player.current_frame = self.frame_manager.current_frame_index
+        self.video_player.audio_enabled = True
+        self.video_player._start_audio_playback()
+        self._detached_audio_active = True
+        self._detached_audio_pending = False
 
     def _sync_detached_play_button(self):
         button = getattr(self, "_detached_play_button", None)
@@ -5235,11 +5341,11 @@ class EditorScreen:
         useful_seconds = max(0, info["index"] - useful.start) / fps
         useful_duration = max(0, useful.end - useful.start + 1) / fps
         variable.set(
-            f"Frame interno {info['index'] + 1}/{info['total']}   •   "
-            f"Projeto {self._format_counter_time(project_seconds)}   •   "
-            f"Fonte {self._format_counter_time(source_seconds)}   •   "
-            f"Trecho {self._format_counter_time(useful_seconds)} / "
-            f"{self._format_counter_time(useful_duration)}"
+            f"FRAME {info['index'] + 1} / {info['total']}     •     "
+            f"TRECHO {self._format_counter_time(useful_seconds)} / "
+            f"{self._format_counter_time(useful_duration)}\n"
+            f"PROJETO {self._format_counter_time(project_seconds)}     •     "
+            f"FONTE ORIGINAL {self._format_counter_time(source_seconds)}"
         )
 
     def _toggle_detached_fullscreen(self):
@@ -5291,9 +5397,17 @@ class EditorScreen:
             info = self.frame_manager.get_current_frame_info()
             if not info:
                 return
-            original = self._load_image(info["path"])
-            result_path = self._render_source_path(info["index"])
-            result = self._load_image(result_path) if os.path.isfile(result_path) else None
+            pair = self._review_preview_pair(info["index"])
+            if pair is not None:
+                original, result = pair
+            else:
+                original = self._load_image(info["path"])
+                result_path = self._render_source_path(info["index"])
+                result = (
+                    self._load_image(result_path)
+                    if os.path.isfile(result_path)
+                    else None
+                )
             if original is None:
                 return
             if self._detached_view_mode == "restored" and result is not None:
@@ -5304,7 +5418,13 @@ class EditorScreen:
                 )
             else:
                 image = original
-            image.thumbnail((width, height), Image.Resampling.LANCZOS)
+            image = image.copy()
+            resampling = (
+                Image.Resampling.BILINEAR
+                if self._frame_review_playing
+                else Image.Resampling.LANCZOS
+            )
+            image.thumbnail((width, height), resampling)
             photo = ImageTk.PhotoImage(image)
             self._detached_canvas.delete("all")
             self._detached_canvas.create_image(
@@ -5973,6 +6093,177 @@ class EditorScreen:
         self.filmstrip_zoom_label.config(text="120%")
         self._schedule_filmstrip_update(20)
 
+    def _review_result_directory(self):
+        if (
+            getattr(self, "view_upscale_var", None) is not None
+            and self.view_upscale_var.get()
+            and os.path.isdir(self.upscaled_dir)
+        ):
+            return self.upscaled_dir
+        if self.use_manual_stab_var.get() and os.path.isdir(self.manual_stab_dir):
+            return self.manual_stab_dir
+        if self.use_auto_stab_var.get() and os.path.isdir(self.auto_stab_dir):
+            return self.auto_stab_dir
+        return self.restored_dir
+
+    def _prepare_review_prefetch(self, current, direction):
+        with self._review_preview_lock:
+            self._review_prefetch_generation += 1
+            generation = self._review_prefetch_generation
+            self._review_preview_cache.clear()
+            self._review_preview_order.clear()
+            self._review_prefetch_pending.clear()
+        while True:
+            try:
+                self._review_prefetch_queue.get_nowait()
+                self._review_prefetch_queue.task_done()
+            except queue.Empty:
+                break
+        self._review_result_dir = self._review_result_directory()
+        self._queue_review_window(current, direction, generation=generation)
+        return generation
+
+    def _queue_review_window(self, center, direction, generation=None):
+        if not self.frame_manager or not self.frame_manager.frames:
+            return
+        generation = generation or self._review_prefetch_generation
+        total = len(self.frame_manager.frames)
+        direction = 1 if direction >= 0 else -1
+        indices = [center]
+        indices.extend(center + direction * offset for offset in range(1, 25))
+        indices.extend(center - direction * offset for offset in range(1, 5))
+        for priority, index in enumerate(indices):
+            if 0 <= index < total:
+                self._queue_review_frame(index, priority, generation)
+
+    def _queue_review_frame(self, frame_index, priority, generation):
+        key = (generation, int(frame_index))
+        with self._review_preview_lock:
+            if key in self._review_preview_cache or key in self._review_prefetch_pending:
+                return
+            self._review_prefetch_pending.add(key)
+        filename = self.frame_manager.frames[frame_index]
+        original_path = os.path.join(self.frame_manager.frames_dir, filename)
+        result_path = os.path.join(self._review_result_dir, filename)
+        if not os.path.isfile(result_path):
+            fallback = os.path.join(self.restored_dir, filename)
+            result_path = fallback if os.path.isfile(fallback) else original_path
+        self._review_prefetch_queue.put(
+            (
+                int(priority),
+                generation,
+                int(frame_index),
+                original_path,
+                result_path,
+                self._review_preview_size,
+            )
+        )
+
+    def _review_prefetch_worker(self):
+        from PIL import Image
+
+        while not self._review_prefetch_stop.is_set():
+            try:
+                (
+                    _priority,
+                    generation,
+                    frame_index,
+                    original_path,
+                    result_path,
+                    preview_size,
+                ) = self._review_prefetch_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            key = (generation, frame_index)
+            try:
+                if generation != self._review_prefetch_generation:
+                    continue
+                original = self._load_review_preview_file(
+                    original_path, preview_size, Image
+                )
+                if original is None:
+                    continue
+                if result_path == original_path:
+                    result = original
+                else:
+                    result = self._load_review_preview_file(
+                        result_path, preview_size, Image
+                    ) or original
+                with self._review_preview_lock:
+                    if generation != self._review_prefetch_generation:
+                        continue
+                    self._review_preview_cache[key] = (original, result)
+                    self._review_preview_order.append(key)
+                    while len(self._review_preview_order) > self._review_preview_cache_max:
+                        oldest = self._review_preview_order.pop(0)
+                        self._review_preview_cache.pop(oldest, None)
+            except Exception:
+                self.logger.debug(
+                    "Falha ao preparar preview do frame %s", frame_index, exc_info=True
+                )
+            finally:
+                with self._review_preview_lock:
+                    self._review_prefetch_pending.discard(key)
+                self._review_prefetch_queue.task_done()
+
+    @staticmethod
+    def _load_review_preview_file(path, preview_size, image_module):
+        try:
+            with image_module.open(path) as source:
+                image = source.convert("RGB")
+            image.thumbnail(preview_size, image_module.Resampling.BILINEAR)
+            return image
+        except (OSError, ValueError):
+            return None
+
+    def _review_preview_pair(self, frame_index):
+        key = (self._review_prefetch_generation, int(frame_index))
+        with self._review_preview_lock:
+            return self._review_preview_cache.get(key)
+
+    @staticmethod
+    def _fast_photo_from_pil(image, width, height):
+        try:
+            from PIL import Image, ImageTk
+
+            preview = image.copy()
+            preview.thumbnail(
+                (max(1, int(width)), max(1, int(height))),
+                Image.Resampling.BILINEAR,
+            )
+            return ImageTk.PhotoImage(preview)
+        except Exception:
+            return None
+
+    def _show_cached_review_frame(self, frame_index):
+        pair = self._review_preview_pair(frame_index)
+        if pair is None:
+            self._queue_review_window(frame_index, self._frame_review_direction)
+            return False
+        original, result = pair
+        if self.view_mode == "restored":
+            display = result
+        elif self.view_mode == "compare":
+            display = self._compose_compare(
+                original, result, self.compare_var.get()
+            )
+        else:
+            display = original
+        width = self.frame_canvas.winfo_width()
+        height = self.frame_canvas.winfo_height()
+        photo = self._fast_photo_from_pil(display, width, height)
+        if photo is None:
+            return False
+        self.frame_canvas.delete("all")
+        self.frame_canvas.create_image(
+            width // 2, height // 2, image=photo, anchor=tk.CENTER
+        )
+        self.frame_canvas.image = photo
+        self._current_display_image = display
+        self._schedule_detached_render(0)
+        self._queue_review_window(frame_index, self._frame_review_direction)
+        return True
+
     def _frame_review_speed(self):
         try:
             return max(
@@ -5989,6 +6280,10 @@ class EditorScreen:
             fps = 0.0
         return fps if fps > 0 else 24.0
 
+    def _frame_review_audio_label(self):
+        variable = getattr(self, "_detached_audio_var", None)
+        return "com áudio" if variable is not None and variable.get() else "sem áudio"
+
     def start_frame_review(self, direction=1):
         bounds = self._current_work_range(show_error=True)
         if bounds is None:
@@ -6003,14 +6298,20 @@ class EditorScreen:
         self.stop_frame_review(silent=True)
         self._frame_review_direction = direction
         self._frame_review_playing = True
+        self._frame_review_buffering = True
+        self._frame_review_buffer_deadline = time.perf_counter() + 0.35
+        self._prepare_review_prefetch(
+            self.frame_manager.current_frame_index, direction
+        )
         interval = 1.0 / (self._frame_review_fps() * self._frame_review_speed())
-        self._frame_review_next_due = time.perf_counter() + interval
+        self._frame_review_next_due = None
         direction_label = "avançando" if direction > 0 else "voltando"
         self.status_var.set(
-            f"Revisando frames sem áudio em {self.frame_review_speed_var.get()} "
-            f"({direction_label})"
+            f"Preparando preview fluido {self._frame_review_audio_label()} em "
+            f"{self.frame_review_speed_var.get()} "
+            f"({direction_label})..."
         )
-        self._schedule_frame_review(max(1, int(interval * 1000)))
+        self._schedule_frame_review(15)
 
     def _schedule_frame_review(self, delay):
         if self._frame_review_job is not None:
@@ -6031,6 +6332,25 @@ class EditorScreen:
         start, end = bounds
         interval = 1.0 / (self._frame_review_fps() * self._frame_review_speed())
         now = time.perf_counter()
+        if self._frame_review_buffering:
+            current = self.frame_manager.current_frame_index
+            next_index = max(start, min(end, current + self._frame_review_direction))
+            ready = self._review_preview_pair(next_index) is not None
+            if not ready and now < (self._frame_review_buffer_deadline or now):
+                self._queue_review_window(current, self._frame_review_direction)
+                self._schedule_frame_review(15)
+                return
+            self._frame_review_buffering = False
+            self._frame_review_next_due = now
+            self._start_detached_audio_after_buffer()
+            direction_label = (
+                "avançando" if self._frame_review_direction > 0 else "voltando"
+            )
+            self.status_var.set(
+                f"Revisando frames {self._frame_review_audio_label()} em "
+                f"{self.frame_review_speed_var.get()} "
+                f"({direction_label})"
+            )
         due = self._frame_review_next_due or now
         if now < due:
             self._schedule_frame_review(max(1, int((due - now) * 1000)))
@@ -6041,9 +6361,14 @@ class EditorScreen:
         )
         reached_end = target > end if self._frame_review_direction > 0 else target < start
         target = max(start, min(end, target))
+        if self._review_preview_pair(target) is None:
+            self._queue_review_window(target, self._frame_review_direction)
+            self._frame_review_next_due = now + 0.01
+            self._schedule_frame_review(10)
+            return
         self._frame_review_next_due = due + steps * interval
         if self.frame_manager.go_to_frame(target):
-            self.show_current_frame()
+            self._show_cached_review_frame(target)
             self.update_frame_counter()
         if reached_end:
             self.stop_frame_review()
@@ -6057,6 +6382,9 @@ class EditorScreen:
     def stop_frame_review(self, silent=False):
         was_playing = self._frame_review_playing
         self._frame_review_playing = False
+        self._frame_review_buffering = False
+        self._frame_review_buffer_deadline = None
+        self._detached_audio_pending = False
         self._frame_review_next_due = None
         if self._frame_review_job is not None:
             try:
@@ -6070,6 +6398,8 @@ class EditorScreen:
             self.video_player._stop_audio_playback()
             self._detached_audio_active = False
         self._sync_detached_play_button()
+        if was_playing and not silent and self.frame_manager:
+            self._schedule_frame_redraw(0)
 
     def _update_filmstrip(self, center_index):
         if not self.frame_manager or not hasattr(self, "filmstrip_canvas"):
@@ -6742,7 +7072,7 @@ class EditorScreen:
 
     def _clean_plate_camera_segment(self, segment):
         self._apply_camera_segment(segment)
-        self.open_clean_plate_dialog()
+        self.open_clean_plate_dialog(suggested_segment=segment)
 
     def _preview_camera_segment(self, segment):
         self._apply_camera_segment(segment)
@@ -6754,21 +7084,45 @@ class EditorScreen:
         output_path = os.path.join(preview_dir, f"{safe_name}_preview.mp4")
         self.preview_from_frames_action(output_path=output_path, open_when_done=True)
 
-    def open_clean_plate_dialog(self):
+    def _choose_processing_scope(self, operation_name, suggested_segment=None):
+        total = len(self.frame_manager.frames) if self.frame_manager else 0
+        if total <= 0:
+            return None
+        active_range = self._current_work_range() or (0, total - 1)
+        useful = self._useful_frame_range()
+        source = self._camera_segment_source()
+        return OperationScopeDialog(
+            self.root,
+            operation_name,
+            total,
+            active_range,
+            (useful.start, useful.end),
+            self.camera_segment_store.list(source),
+            suggested_segment=suggested_segment,
+        ).show()
+
+    def _activate_operation_scope(self, scope):
+        self.range_start_var.set(str(scope.start + 1))
+        self.range_end_var.set(str(scope.end + 1))
+        self._update_range_summary()
+        self.status_var.set(
+            f"Escopo confirmado: {scope.label} — frames "
+            f"{scope.start + 1}–{scope.end + 1}"
+        )
+
+    def open_clean_plate_dialog(self, suggested_segment=None):
         if not self.frame_manager or len(self.frame_manager.frames) < 3:
             messagebox.showinfo(
                 "Placa limpa", "São necessários pelo menos três frames extraídos."
             )
             return
-        try:
-            start = max(0, int(self.range_start_entry.get()) - 1)
-            end = min(
-                len(self.frame_manager.frames) - 1,
-                int(self.range_end_entry.get()) - 1,
-            )
-        except ValueError:
-            messagebox.showerror("Placa limpa", "Escolha um intervalo válido.")
+        scope = self._choose_processing_scope(
+            "Placa limpa", suggested_segment=suggested_segment
+        )
+        if scope is None:
             return
+        self._activate_operation_scope(scope)
+        start, end = scope.start, scope.end
         if end - start < 2:
             messagebox.showerror(
                 "Placa limpa", "O intervalo precisa conter pelo menos três frames."
@@ -7652,12 +8006,14 @@ class EditorScreen:
         if not self.frame_manager or not self.frame_manager.frames:
             messagebox.showwarning("Aviso", "Nenhum frame carregado.")
             return
-        try:
-            start = int(self.range_start_entry.get()) - 1
-            end = int(self.range_end_entry.get()) - 1
-        except ValueError:
-            messagebox.showerror("Erro", "Intervalo invalido.")
+        scope = self._choose_processing_scope(
+            "Estabilização", suggested_segment=preview_segment
+        )
+        if scope is None:
             return
+        self._activate_operation_scope(scope)
+        start, end = scope.start, scope.end
+        preview_segment = scope.segment
 
         try:
             window = int(self.stab_window_entry.get())
@@ -7707,8 +8063,10 @@ class EditorScreen:
                 temp_out,
                 progress_callback=progress_callback,
                 window_radius=radius,
+                cancel_callback=lambda: context.cancellation_requested,
             )
             if not success:
+                context.check_cancelled()
                 raise RuntimeError("A estabilização automática não produziu resultado")
             outputs = []
             output_names = os.listdir(temp_out)
@@ -7737,7 +8095,9 @@ class EditorScreen:
                 self._preview_camera_segment(preview_segment)
 
         self._start_ui_job(
-            "Estabilização automática", stabilization_task, stabilization_complete
+            f"Estabilização — {scope.label}",
+            stabilization_task,
+            stabilization_complete,
         )
 
     def _ensure_upscale_model(self):
@@ -9176,6 +9536,7 @@ class EditorScreen:
             if self._active_job_id:
                 self.job_manager.cancel(self._active_job_id)
             self._thumb_worker_stop.set()
+            self._review_prefetch_stop.set()
             if self._thumb_ready_job:
                 self.root.after_cancel(self._thumb_ready_job)
                 self._thumb_ready_job = None

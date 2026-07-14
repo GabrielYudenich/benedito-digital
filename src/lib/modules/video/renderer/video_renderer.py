@@ -427,7 +427,8 @@ class VideoRenderer:
     def stabilize_frames_ecc(self, frames_dir: str, output_dir: str,
                              progress_callback: Optional[callable] = None,
                              use_bidirectional: bool = True,
-                             window_radius: int = 1) -> bool:
+                             window_radius: int = 1,
+                             cancel_callback: Optional[Callable[[], bool]] = None) -> bool:
         """Stabilize frames using ECC alignment to neighboring frames."""
         try:
             os.makedirs(output_dir, exist_ok=True)
@@ -438,6 +439,8 @@ class VideoRenderer:
 
             total = len(frame_files)
             for i, fname in enumerate(frame_files):
+                if cancel_callback and cancel_callback():
+                    return False
                 path = os.path.join(frames_dir, fname)
                 img = cv2.imread(path)
                 if img is None:
@@ -454,6 +457,8 @@ class VideoRenderer:
                     radius = max(1, int(window_radius or 1))
                     offsets = [-1] if not use_bidirectional else list(range(-radius, radius + 1))
                     for off in offsets:
+                        if cancel_callback and cancel_callback():
+                            return False
                         if off == 0:
                             continue
                         j = i + off
@@ -480,6 +485,8 @@ class VideoRenderer:
                 except Exception:
                     stabilized = img
 
+                if cancel_callback and cancel_callback():
+                    return False
                 cv2.imwrite(os.path.join(output_dir, fname), stabilized)
                 if progress_callback:
                     progress_callback(((i + 1) / total) * 100.0)

@@ -275,6 +275,17 @@ def test_burn_in_counters_change_rendered_frame():
     assert int(result.sum()) > 0
 
 
+def test_review_preview_loader_limits_resolution(tmp_path):
+    frame_path = tmp_path / "frame.png"
+    Image.new("RGB", (1920, 1080), "white").save(frame_path)
+
+    preview = EditorScreen._load_review_preview_file(
+        str(frame_path), (1280, 720), Image
+    )
+
+    assert preview.size == (1280, 720)
+
+
 def test_frame_review_plays_selected_range_without_audio_controls():
     screen = object.__new__(EditorScreen)
     screen.root = FakeRoot()
@@ -288,10 +299,13 @@ def test_frame_review_plays_selected_range_without_audio_controls():
     screen._frame_review_direction = 1
     screen._frame_review_job = None
     screen._frame_review_next_due = None
+    screen._prepare_review_prefetch = lambda _current, _direction: 1
+    screen._review_preview_pair = lambda _index: (object(), object())
     displayed = []
     screen.show_current_frame = lambda: displayed.append(
         screen.frame_manager.current_frame_index
     )
+    screen._show_cached_review_frame = lambda index: displayed.append(index) or True
     screen.update_frame_counter = lambda: None
 
     screen.start_frame_review(1)

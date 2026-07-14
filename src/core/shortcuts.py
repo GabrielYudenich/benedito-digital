@@ -56,9 +56,17 @@ def default_shortcuts_path() -> Path:
 
 
 def shortcut_to_tk(value: str) -> str | None:
+    modifiers, normalized_key = parse_shortcut(value)
+    if normalized_key is None:
+        return None
+    components = [*modifiers, normalized_key]
+    return f"<{ '-'.join(components) }>"
+
+
+def parse_shortcut(value: str) -> tuple[tuple[str, ...], str | None]:
     parts = [part.strip() for part in str(value).split("+") if part.strip()]
     if not parts:
-        return None
+        return (), None
     modifier_names = {
         "ctrl": "Control",
         "control": "Control",
@@ -88,10 +96,40 @@ def shortcut_to_tk(value: str) -> str | None:
         "up": "Up",
         "down": "Down",
         "comma": "comma",
+        ",": "comma",
+        "[": "bracketleft",
+        "]": "bracketright",
     }
     normalized_key = aliases.get(key.lower(), key.lower() if len(key) == 1 else key)
-    components = [*modifiers, normalized_key]
-    return f"<{ '-'.join(components) }>"
+    return tuple(modifiers), normalized_key
+
+
+def shortcut_matches_event(value: str, keysym: str, state: int) -> bool:
+    """Match a Tk key event while ignoring Caps Lock and Num Lock state."""
+    modifiers, expected_key = parse_shortcut(value)
+    if expected_key is None:
+        return False
+    active_modifiers = set()
+    if state & 0x0001:
+        active_modifiers.add("Shift")
+    if state & 0x0004:
+        active_modifiers.add("Control")
+    if state & 0x0008 or state & 0x20000:
+        active_modifiers.add("Alt")
+    if active_modifiers != set(modifiers):
+        return False
+    event_key = str(keysym or "")
+    aliases = {
+        ",": "comma",
+        "[": "bracketleft",
+        "]": "bracketright",
+    }
+    event_key = aliases.get(event_key, event_key)
+    if len(event_key) == 1:
+        event_key = event_key.lower()
+    if len(expected_key) == 1:
+        expected_key = expected_key.lower()
+    return event_key.lower() == expected_key.lower()
 
 
 class ShortcutPreferences:

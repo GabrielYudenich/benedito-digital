@@ -156,7 +156,7 @@ class TaskProgressDialog:
         self._center()
 
     def update(self, snapshot):
-        if not self.window.winfo_exists():
+        if not self.exists():
             return
         self.last_snapshot = snapshot
         progress = max(0.0, min(100.0, float(snapshot.progress)))
@@ -194,16 +194,26 @@ class TaskProgressDialog:
         self.cancel_callback()
 
     def show(self):
+        if not self.exists():
+            return False
         self.window.deiconify()
         self.window.lift()
         self.window.focus_force()
+        return True
 
     def hide(self):
-        self.window.withdraw()
+        if self.exists():
+            self.window.withdraw()
 
     def close(self):
-        if self.window.winfo_exists():
+        if self.exists():
             self.window.destroy()
+
+    def exists(self):
+        try:
+            return bool(self.window.winfo_exists())
+        except tk.TclError:
+            return False
 
     def toggle_details(self):
         if self.details.winfo_manager():

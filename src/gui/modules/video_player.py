@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 class VideoPlayer:
     def __init__(self, use_gpu: bool = True):
+        cv2.setUseOptimized(True)
         self.use_gpu = use_gpu
         self.cap: Optional[cv2.VideoCapture] = None
         self.current_frame = 0
@@ -87,7 +88,7 @@ class VideoPlayer:
                 self.cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
 
                 # Set optimal buffer size for GPU processing
-                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 4)
 
                 if not self.cap.isOpened():
                     # Fallback to CPU
