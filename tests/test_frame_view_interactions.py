@@ -2,6 +2,9 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
+from PIL import Image
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT / "src"
@@ -14,9 +17,19 @@ from gui.screens.editor_screen import EditorScreen
 class FakeCanvas:
     def __init__(self):
         self.configurations = []
+        self.items = []
 
     def configure(self, **values):
         self.configurations.append(values)
+
+    def create_line(self, *coordinates, **values):
+        self.items.append(("line", coordinates, values))
+
+    def create_oval(self, *coordinates, **values):
+        self.items.append(("oval", coordinates, values))
+
+    def delete(self, tag):
+        self.items.append(("delete", tag, {}))
 
 
 def test_right_drag_pans_instead_of_painting_or_erasing():
@@ -49,3 +62,53 @@ def test_clone_right_click_still_sets_source_without_dragging():
     screen._on_secondary_end(event)
 
     assert sources == [event]
+
+
+def test_brush_draws_continuous_stroke_at_selected_size():
+    screen = object.__new__(EditorScreen)
+    screen.frame_manager = SimpleNamespace(
+        get_current_frame_info=lambda: {
+            "path": "frame.png",
+            "width": 200,
+            "height": 100,
+        }
+    )
+    screen.frame_canvas = FakeCanvas()
+    screen.brush_size = 9
+    screen._view_scale = 1.0
+    screen._view_offset = (0, 0)
+    screen._current_mask = Image.new("L", (200, 100), 0)
+    screen._current_mask_path = "frame.png"
+    screen._active_stroke = {
+        "tool": "brush",
+        "radius": 9,
+        "value": 255,
+        "points": [],
+    }
+    screen._brush_preview_canvas_point = None
+
+    screen._apply_brush(20, 50, 255)
+    screen._apply_brush(170, 50, 255)
+
+    pixels = np.asarray(screen._current_mask)
+    assert pixels[50, 20] == 255
+    assert pixels[50, 95] == 255
+    assert pixels[50, 170] == 255
+    assert pixels[42, 95] == 255
+    assert any(item[0] == "line" for item in screen.frame_canvas.items)
+
+
+def test_primary_drag_routes_erase_events_to_eraser():
+    screen = object.__new__(EditorScreen)
+    screen.selected_tool = "erase"
+    calls = []
+    screen._on_erase_start = lambda event: calls.append(("start", event.x))
+    screen._on_erase_move = lambda event: calls.append(("move", event.x))
+    screen._on_erase_end = lambda event: calls.append(("end", event.x))
+    event = SimpleNamespace(x=42, y=15)
+
+    screen._on_primary_start(event)
+    screen._on_primary_move(event)
+    screen._on_primary_end(event)
+
+    assert calls == [("start", 42), ("move", 42), ("end", 42)]
