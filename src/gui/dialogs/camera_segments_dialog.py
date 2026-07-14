@@ -16,6 +16,7 @@ class CameraSegmentsDialog:
         apply_callback,
         stabilize_callback,
         clean_plate_callback,
+        preview_callback,
     ):
         self.detect_callback = detect_callback
         self.add_callback = add_callback
@@ -23,6 +24,7 @@ class CameraSegmentsDialog:
         self.apply_callback = apply_callback
         self.stabilize_callback = stabilize_callback
         self.clean_plate_callback = clean_plate_callback
+        self.preview_callback = preview_callback
         self.current_range = current_range
         self.segments = []
         self.window = tk.Toplevel(parent)
@@ -166,6 +168,16 @@ class CameraSegmentsDialog:
             padx=12,
             pady=7,
         ).pack(side=tk.LEFT, padx=4)
+        tk.Button(
+            segment_actions,
+            text="Pré-renderizar",
+            command=self._preview,
+            bg="#352a45",
+            fg="white",
+            relief=tk.FLAT,
+            padx=12,
+            pady=7,
+        ).pack(side=tk.LEFT, padx=4)
         self.set_segments(segments)
 
     def set_segments(self, segments, selected_id=None):
@@ -239,4 +251,10 @@ class CameraSegmentsDialog:
         segment = self._selected()
         if segment:
             self.clean_plate_callback(segment)
+            self.window.destroy()
+
+    def _preview(self):
+        segment = self._selected()
+        if segment:
+            self.preview_callback(segment)
             self.window.destroy()

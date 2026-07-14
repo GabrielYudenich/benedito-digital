@@ -19,6 +19,12 @@ def test_catalog_searches_exact_frame_number_and_status():
     assert filter_frame_indices(
         frames, statuses, query="10", status_filter="scratch"
     ) == [9]
+    assert filter_frame_indices(
+        frames,
+        statuses,
+        status_filter="excluded",
+        excluded_indices={0, 1, 2},
+    ) == [0, 1, 2]
 
 
 def test_catalog_pages_filtered_results_without_loading_every_widget():

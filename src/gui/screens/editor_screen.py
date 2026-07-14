@@ -31,12 +31,14 @@ from lib.utils.logger import get_logger
 from core.chunks import ChunkedFrameRunner
 from core.damage_analysis import FrameDamageAnalyzer
 from core.frame_catalog import catalog_page, filter_frame_indices
+from core.frame_cuts import FrameCutStore
 from core.jobs import JobManager, JobState
 from core.model_registry import ModelRegistry
 from core.paths import default_models_dir, resource_root
 from core.media_browser import paginate_frame_files
 from core.selections import polygon_mask, rectangle_mask, selection_bounds
 from core.storage import estimate_lossless_frames_bytes, require_free_space
+from core.shortcuts import ShortcutPreferences
 from core.accessibility import AccessibilityPreferences
 from core.camera_segments import CameraSegment, CameraSegmentStore, detect_camera_segments
 from core.clean_plate import (
@@ -65,6 +67,7 @@ from gui.dialogs.model_registry_dialog import ModelRegistryDialog
 from gui.dialogs.progress_dialog import TaskProgressDialog
 from gui.dialogs.proxy_dialog import ProxyDialog
 from gui.dialogs.restoration_workflow_dialog import RestorationWorkflowDialog, VHSProcessingDialog
+from gui.dialogs.shortcut_settings_dialog import ShortcutSettingsDialog
 from gui.dialogs.workflow_assistant import WorkflowAssistant
 from gui.mousewheel import scroll_canvas_if_within
 from gui.frame_view import anchored_zoom_pan, clamp_view_pan, filmstrip_window_indices
@@ -88,6 +91,7 @@ class EditorScreen:
         "missing": "#38bdf8",
         "perforation": "#ec4899",
         "approved": "#22c55e",
+        "excluded": "#94a3b8",
     }
 
     def __init__(self, root, project, project_manager):
@@ -152,6 +156,10 @@ class EditorScreen:
         self.camera_segment_store = CameraSegmentStore(
             self.project_manager.current_project_path
         )
+        self.frame_cut_store = FrameCutStore(
+            self.project_manager.current_project_path
+        )
+        self.shortcut_preferences = ShortcutPreferences()
         self.brush_size = 12
         self.frame_zoom = 1.0
         self.frame_pan = (0.0, 0.0)
@@ -202,6 +210,10 @@ class EditorScreen:
         self._detached_viewer = None
         self._detached_canvas = None
         self._detached_render_job = None
+        self._detached_view_mode = "compare"
+        self._detached_audio_active = False
+        self._properties_window = None
+        self._bound_shortcut_sequences = set()
         self._frame_bottom_visible = True
         self._updating_frame_slider = False
         self._frame_review_playing = False
@@ -309,13 +321,22 @@ class EditorScreen:
         menubar.add_cascade(label="Arquivo", menu=file_menu)
 
         edit_menu = tk.Menu(menubar, tearoff=0)
-        edit_menu.add_command(label="Undo", command=self.undo_action)
-        edit_menu.add_command(label="Redo", command=self.redo_action)
+        edit_menu.add_command(
+            label="Undo",
+            command=self.undo_action,
+            accelerator=self.shortcut_preferences.get("undo"),
+        )
+        edit_menu.add_command(
+            label="Redo",
+            command=self.redo_action,
+            accelerator=self.shortcut_preferences.get("redo"),
+        )
         edit_menu.add_separator()
         frame_state_menu = tk.Menu(edit_menu, tearoff=0)
         frame_state_menu.add_command(
-            label="Sinalizar...    Shift+S",
+            label="Sinalizar...",
             command=self.open_frame_review_panel,
+            accelerator=self.shortcut_preferences.get("signal_frame"),
         )
         frame_state_menu.add_command(
             label="Próximo sinalizado",
@@ -330,22 +351,101 @@ class EditorScreen:
             label="Analisar danos...", command=self.open_damage_analysis
         )
         edit_menu.add_cascade(label="Estado do frame", menu=frame_state_menu)
+        cut_menu = tk.Menu(edit_menu, tearoff=0)
+        cut_menu.add_command(
+            label="Definir frame atual como início útil",
+            command=self.set_useful_start_here,
+            accelerator=self.shortcut_preferences.get("useful_start"),
+        )
+        cut_menu.add_command(
+            label="Definir frame atual como final útil",
+            command=self.set_useful_end_here,
+            accelerator=self.shortcut_preferences.get("useful_end"),
+        )
+        cut_menu.add_separator()
+        cut_menu.add_command(
+            label="Restaurar filme inteiro no corte",
+            command=self.reset_useful_range,
+        )
+        edit_menu.add_cascade(label="Corte não destrutivo", menu=cut_menu)
         edit_menu.add_separator()
-        edit_menu.add_command(label="Timeline multipista...", command=self.timeline_controller.open_dialog)
+        edit_menu.add_command(
+            label="Timeline multipista...",
+            command=self.timeline_controller.open_dialog,
+            accelerator=self.shortcut_preferences.get("timeline"),
+        )
         menubar.add_cascade(label="Editar", menu=edit_menu)
 
         view_menu = tk.Menu(menubar, tearoff=0)
         view_menu.add_command(label="Original", command=lambda: self._set_view_mode("original"))
         view_menu.add_command(label="Restaurado", command=lambda: self._set_view_mode("restored"))
-        view_menu.add_command(label="Comparar (split)", command=self.enable_compare_view)
-        view_menu.add_command(label="Scopes de cor...", command=self.color_scopes_controller.open_dialog)
+        view_menu.add_command(
+            label="Comparar (split)",
+            command=self.enable_compare_view,
+            accelerator=self.shortcut_preferences.get("compare"),
+        )
+        view_menu.add_command(
+            label="Scopes de cor...",
+            command=self.color_scopes_controller.open_dialog,
+            accelerator=self.shortcut_preferences.get("scopes"),
+        )
         view_menu.add_separator()
         view_menu.add_command(label="Mostrar máscara manual", command=lambda: self._toggle_var(self.show_mask_var))
         view_menu.add_command(label="Mostrar auto-máscara", command=lambda: self._toggle_var(self.show_auto_mask_var))
         view_menu.add_separator()
-        view_menu.add_command(label="Abrir frame em segunda tela", command=self.open_detached_frame_viewer)
+        view_menu.add_command(
+            label="Abrir frame em segunda tela",
+            command=self.open_detached_frame_viewer,
+            accelerator=self.shortcut_preferences.get("second_screen"),
+        )
         view_menu.add_command(label="Ajustar frame à janela", command=self.reset_frame_view)
         menubar.add_cascade(label="Exibir", menu=view_menu)
+
+        restoration_menu = tk.Menu(menubar, tearoff=0)
+        restoration_menu.add_command(
+            label="Posicionamentos de câmera...",
+            command=self.open_camera_segments_dialog,
+            accelerator=self.shortcut_preferences.get("positions"),
+        )
+        restoration_menu.add_command(
+            label="Criar placa limpa do trecho...",
+            command=self.open_clean_plate_dialog,
+            accelerator=self.shortcut_preferences.get("clean_plate"),
+        )
+        restoration_menu.add_command(
+            label="Estabilizar trecho ativo",
+            command=self.apply_auto_stabilization_range,
+            accelerator=self.shortcut_preferences.get("stabilize"),
+        )
+        restoration_menu.add_separator()
+        restoration_menu.add_command(
+            label="Pré-renderizar trecho ativo...",
+            command=self.preview_from_frames_action,
+            accelerator=self.shortcut_preferences.get("preview"),
+        )
+        restoration_menu.add_command(
+            label="Renderizar resultado final...",
+            command=self.render_restored_video_action,
+            accelerator=self.shortcut_preferences.get("render"),
+        )
+        menubar.add_cascade(label="Restauração", menu=restoration_menu)
+
+        properties_menu = tk.Menu(menubar, tearoff=0)
+        properties_menu.add_command(
+            label="Abrir propriedades avançadas...",
+            command=self.open_properties_window,
+            accelerator=self.shortcut_preferences.get("properties"),
+        )
+        properties_menu.add_command(
+            label="Configurar atalhos...",
+            command=self.open_shortcut_settings,
+            accelerator=self.shortcut_preferences.get("shortcut_settings"),
+        )
+        properties_menu.add_command(
+            label="Leitura e acessibilidade...",
+            command=self.open_accessibility_dialog,
+        )
+        menubar.add_cascade(label="Propriedades", menu=properties_menu)
 
         version_menu = tk.Menu(menubar, tearoff=0)
         version_menu.add_command(label="Gerenciar branches...", command=self.open_branch_manager)
@@ -617,30 +717,64 @@ class EditorScreen:
             messagebox.showinfo("Tutorial", "Veja o arquivo README_TUTORIAL.md na pasta do projeto.")
 
     def _bind_shortcuts(self):
-        self.root.bind("<Left>", lambda event: self._navigation_shortcut(event, self.previous_frame))
-        self.root.bind("<Right>", lambda event: self._navigation_shortcut(event, self.next_frame))
-        self.root.bind("<Up>", lambda event: self._navigation_shortcut(event, self.first_frame))
-        self.root.bind("<Down>", lambda event: self._navigation_shortcut(event, self.last_frame))
-        self.root.bind("i", lambda e: self._set_range_start())
-        self.root.bind("o", lambda e: self._set_range_end())
-        self.root.bind("<Control-z>", lambda e: self.undo_action())
-        self.root.bind("<Control-y>", lambda e: self.redo_action())
-        self.root.bind("<Control-Shift-T>", lambda _event: self.timeline_controller.open_dialog())
-        self.root.bind("<Control-Shift-C>", lambda _event: self.collaboration_controller.open_dialog())
-        self.root.bind("<Control-Shift-S>", lambda _event: self.color_scopes_controller.open_dialog())
-        self.root.bind(
-            "<Shift-S>",
-            lambda event: self._navigation_shortcut(
-                event, self.open_frame_review_panel
-            ),
+        for sequence in self._bound_shortcut_sequences:
+            try:
+                self.root.unbind(sequence)
+            except tk.TclError:
+                pass
+        self._bound_shortcut_sequences.clear()
+        callbacks = {
+            "previous_frame": self.previous_frame,
+            "next_frame": self.next_frame,
+            "first_frame": self.first_frame,
+            "last_frame": self.last_frame,
+            "range_start": self._set_range_start,
+            "range_end": self._set_range_end,
+            "undo": self.undo_action,
+            "redo": self.redo_action,
+            "signal_frame": self.open_frame_review_panel,
+            "toggle_play": self.toggle_playback,
+            "media_catalog": self.show_media_catalog,
+            "frame_catalog": self.show_frame_catalog,
+            "second_screen": self.open_detached_frame_viewer,
+            "compare": self.enable_compare_view,
+            "properties": self.open_properties_window,
+            "shortcut_settings": self.open_shortcut_settings,
+            "positions": self.open_camera_segments_dialog,
+            "clean_plate": self.open_clean_plate_dialog,
+            "stabilize": self.apply_auto_stabilization_range,
+            "preview": self.preview_from_frames_action,
+            "render": self.render_restored_video_action,
+            "timeline": self.timeline_controller.open_dialog,
+            "collaboration": self.collaboration_controller.open_dialog,
+            "scopes": self.color_scopes_controller.open_dialog,
+            "useful_start": self.set_useful_start_here,
+            "useful_end": self.set_useful_end_here,
+            "help": self.show_help_dialog,
+        }
+        for action, callback in callbacks.items():
+            sequence = self.shortcut_preferences.sequence(action)
+            if not sequence:
+                continue
+            self.root.bind(
+                sequence,
+                lambda event, command=callback: self._navigation_shortcut(
+                    event, command
+                ),
+            )
+            self._bound_shortcut_sequences.add(sequence)
+
+    def open_shortcut_settings(self):
+        ShortcutSettingsDialog(
+            self.root,
+            self.shortcut_preferences,
+            self._shortcuts_updated,
         )
-        self.root.bind(
-            "<Shift-s>",
-            lambda event: self._navigation_shortcut(
-                event, self.open_frame_review_panel
-            ),
-        )
-        self.root.bind("<F1>", lambda _event: self.show_help_dialog())
+
+    def _shortcuts_updated(self):
+        self.create_menu()
+        self._bind_shortcuts()
+        self.status_var.set("Atalhos do usuário atualizados")
 
     @staticmethod
     def _navigation_shortcut(event, callback):
@@ -773,11 +907,33 @@ class EditorScreen:
         # Left panel - Media browser
         self.create_left_panel(main_container)
 
-        # Right panel - Properties
-        self.create_right_panel(main_container)
-
         # Center panel - Main workspace
         self.create_center_panel(main_container)
+
+        self._create_properties_window()
+
+    def _create_properties_window(self):
+        window = tk.Toplevel(self.root)
+        window.withdraw()
+        window.title("Benedito Digital — Propriedades avançadas")
+        window.geometry("520x820")
+        window.minsize(430, 520)
+        window.configure(bg=DarkTheme.COLORS['bg_secondary'])
+        window.protocol("WM_DELETE_WINDOW", window.withdraw)
+        self._properties_window = window
+        self.create_right_panel(window)
+
+    def open_properties_window(self):
+        if self._properties_window is None:
+            self._create_properties_window()
+        try:
+            self._properties_window.deiconify()
+            self._properties_window.lift()
+            self._properties_window.focus_force()
+        except tk.TclError:
+            self._properties_window = None
+            self._create_properties_window()
+            self.open_properties_window()
 
     def create_left_panel(self, parent):
         """Create left media browser panel"""
@@ -868,6 +1024,8 @@ class EditorScreen:
         self.media_tree.column("#0", width=270, minwidth=180, stretch=True)
         self.media_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.media_tree.yview)
+        for status, color in self.FRAME_STATUS_COLORS.items():
+            self.media_tree.tag_configure(status, foreground=color)
         self._media_tree_items = {}
         self._media_video_items = {}
         self.media_tree.bind('<<TreeviewSelect>>', self.on_media_select)
@@ -912,7 +1070,11 @@ class EditorScreen:
         )
         filter_row.pack(fill=tk.X, padx=6, pady=(0, 6))
         self.frame_catalog_status_var = tk.StringVar(value="Todos os estados")
-        status_values = ["Todos os estados", *self.FRAME_STATUS_LABELS.keys()]
+        status_values = [
+            "Todos os estados",
+            "Fora do corte",
+            *self.FRAME_STATUS_LABELS.keys(),
+        ]
         self.frame_catalog_status_combo = ttk.Combobox(
             filter_row,
             textvariable=self.frame_catalog_status_var,
@@ -1339,9 +1501,9 @@ class EditorScreen:
         ).pack(side=tk.LEFT)
 
         frame_actions = [
-            ("🗑️", self.delete_frame),
-            ("📋", self.duplicate_frame),
-            ("🔄", self.renumber_frames),
+            ("⊣", self.set_useful_start_here),
+            ("⊢", self.set_useful_end_here),
+            ("↺", self.reset_useful_range),
         ]
 
         for btn_text, btn_cmd in frame_actions:
@@ -1700,7 +1862,7 @@ class EditorScreen:
     def create_right_panel(self, parent):
         """Create right properties panel"""
         right_frame = DarkTheme.create_custom_frame(parent, 'DarkSecondary.TFrame')
-        right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(2, 0))
+        right_frame.pack(fill=tk.BOTH, expand=True)
 
         header_frame = DarkTheme.create_custom_frame(right_frame, 'DarkTertiary.TFrame')
         header_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -2457,6 +2619,17 @@ class EditorScreen:
             activebackground=DarkTheme.COLORS['bg_secondary']
         ).pack(anchor=tk.W, pady=(0, 6))
 
+        self.burn_in_counters_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            actions_frame,
+            text="Incluir contadores no render final",
+            variable=self.burn_in_counters_var,
+            fg=DarkTheme.COLORS['text_secondary'],
+            bg=DarkTheme.COLORS['bg_secondary'],
+            selectcolor=DarkTheme.COLORS['bg_tertiary'],
+            activebackground=DarkTheme.COLORS['bg_secondary'],
+        ).pack(anchor=tk.W, pady=(0, 6))
+
         tk.Button(
             actions_frame,
             text="Salvar frame (aplicar máscara)",
@@ -3126,9 +3299,13 @@ class EditorScreen:
         label = self.frame_catalog_status_var.get()
         if label == "Todos os estados":
             return None
+        if label == "Fora do corte":
+            return "excluded"
         return self.FRAME_STATUS_LABELS.get(label)
 
     def _frame_status_label(self, frame_index):
+        if self._is_frame_outside_useful_range(frame_index):
+            return "excluded", "Fora do corte", {}
         record = self.workspace.get_frame_status(frame_index) if self.workspace else None
         status_key = record.get("status") if record else "unmarked"
         label = next(
@@ -3145,11 +3322,13 @@ class EditorScreen:
         if not self.frame_manager or not self.frame_manager.frames:
             return
         statuses = self.workspace.get_frame_statuses() if self.workspace else {}
+        excluded = self._excluded_frame_indices()
         indices = filter_frame_indices(
             list(self.frame_manager.frames),
             statuses,
             query=self.frame_catalog_search_var.get(),
             status_filter=self._frame_catalog_status_key(),
+            excluded_indices=excluded,
         )
         page_size = 100 if self._frame_catalog_mode == "list" else 40
         if ensure_current and self.frame_manager.current_frame_index in indices:
@@ -3271,6 +3450,7 @@ class EditorScreen:
                 statuses,
                 query=self.frame_catalog_search_var.get(),
                 status_filter=self._frame_catalog_status_key(),
+                excluded_indices=self._excluded_frame_indices(),
             )
             if current in matching:
                 self._refresh_frame_catalog(ensure_current=True)
@@ -3468,14 +3648,45 @@ class EditorScreen:
             self.media_tree.delete(child)
         page = metadata["page"]
         for offset, filename in enumerate(page.files):
-            frame_item = self.media_tree.insert(item, tk.END, text=filename)
+            frame_index = page.start_index + offset
+            status_reader = getattr(self, "_frame_status_label", None)
+            status_key, label, _record = (
+                status_reader(frame_index)
+                if status_reader is not None
+                else ("unmarked", "Sem marcação", None)
+            )
+            warning = "⚠ " if status_key not in {"unmarked", "approved"} else ""
+            suffix = f" — {label}" if status_key != "unmarked" else ""
+            frame_item = self.media_tree.insert(
+                item,
+                tk.END,
+                text=f"{warning}{filename}{suffix}",
+                tags=(status_key,),
+            )
             self._media_tree_items[frame_item] = {
                 "kind": "frame",
                 "video": metadata["video"],
                 "filename": filename,
-                "index": page.start_index + offset,
+                "index": frame_index,
             }
         metadata["loaded"] = True
+
+    def _refresh_loaded_media_frame_statuses(self):
+        for item, metadata in getattr(self, "_media_tree_items", {}).items():
+            if metadata.get("kind") != "frame":
+                continue
+            frame_index = metadata["index"]
+            status_key, label, _record = self._frame_status_label(frame_index)
+            warning = "⚠ " if status_key not in {"unmarked", "approved"} else ""
+            suffix = f" — {label}" if status_key != "unmarked" else ""
+            try:
+                self.media_tree.item(
+                    item,
+                    text=f"{warning}{metadata['filename']}{suffix}",
+                    tags=(status_key,),
+                )
+            except tk.TclError:
+                continue
 
     def _selected_media_video(self):
         selection = self.media_tree.selection()
@@ -4821,6 +5032,89 @@ class EditorScreen:
             padx=10,
             pady=4,
         ).pack(side=tk.RIGHT, padx=8, pady=5)
+        controls = tk.Frame(window, bg=DarkTheme.COLORS['bg_secondary'])
+        controls.pack(fill=tk.X, padx=8, pady=(0, 6))
+        self._detached_mode_buttons = {}
+        for label, mode in (
+            ("Original", "original"),
+            ("Resultado", "restored"),
+            ("Comparar", "compare"),
+        ):
+            button = self._make_compact_button(
+                controls,
+                label,
+                lambda selected=mode: self._set_detached_view_mode(selected),
+                accent=mode == self._detached_view_mode,
+            )
+            button.pack(side=tk.LEFT, padx=2)
+            self._detached_mode_buttons[mode] = button
+        tk.Label(
+            controls,
+            text="Divisor:",
+            bg=DarkTheme.COLORS['bg_secondary'],
+            fg=DarkTheme.COLORS['text_secondary'],
+            font=DarkTheme.FONTS['small'],
+        ).pack(side=tk.LEFT, padx=(10, 3))
+        self._detached_compare_var = tk.IntVar(value=50)
+        detached_compare = ttk.Scale(
+            controls,
+            from_=0,
+            to=100,
+            variable=self._detached_compare_var,
+            command=lambda _value: self._schedule_detached_render(20),
+        )
+        detached_compare.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        self._detached_audio_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            controls,
+            text="Áudio em 1x",
+            variable=self._detached_audio_var,
+            command=self._update_detached_audio,
+            bg=DarkTheme.COLORS['bg_secondary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            selectcolor=DarkTheme.COLORS['bg_tertiary'],
+            activebackground=DarkTheme.COLORS['bg_secondary'],
+        ).pack(side=tk.LEFT, padx=4)
+        self._detached_speed_var = tk.StringVar(value="1x")
+        ttk.Combobox(
+            controls,
+            textvariable=self._detached_speed_var,
+            values=("0.25x", "0.5x", "1x", "2x", "4x"),
+            state="readonly",
+            width=6,
+            style="Dark.TCombobox",
+        ).pack(side=tk.LEFT, padx=3)
+
+        playback = tk.Frame(window, bg=DarkTheme.COLORS['bg_secondary'])
+        playback.pack(fill=tk.X, padx=8, pady=(0, 6))
+        self._make_compact_button(
+            playback, "◀ Frame", self.previous_frame
+        ).pack(side=tk.LEFT, padx=2)
+        self._detached_play_button = self._make_compact_button(
+            playback, "▶ Reproduzir", self._toggle_detached_playback, accent=True
+        )
+        self._detached_play_button.pack(side=tk.LEFT, padx=2)
+        self._make_compact_button(
+            playback, "■ Parar", self._stop_detached_playback
+        ).pack(side=tk.LEFT, padx=2)
+        self._make_compact_button(
+            playback, "Frame ▶", self.next_frame
+        ).pack(side=tk.LEFT, padx=2)
+        self._make_compact_button(
+            playback, "Pré-renderizar", self.preview_from_frames_action
+        ).pack(side=tk.RIGHT, padx=2)
+        self._make_compact_button(
+            playback, "Render final", self.render_restored_video_action
+        ).pack(side=tk.RIGHT, padx=2)
+        tk.Checkbutton(
+            playback,
+            text="Gravar contadores no render",
+            variable=self.burn_in_counters_var,
+            bg=DarkTheme.COLORS['bg_secondary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            selectcolor=DarkTheme.COLORS['bg_tertiary'],
+            activebackground=DarkTheme.COLORS['bg_secondary'],
+        ).pack(side=tk.RIGHT, padx=8)
         canvas = tk.Canvas(
             window,
             bg=DarkTheme.COLORS['player_bg'],
@@ -4828,9 +5122,125 @@ class EditorScreen:
         )
         canvas.pack(fill=tk.BOTH, expand=True)
         canvas.bind("<Configure>", lambda _event: self._schedule_detached_render())
+        self._detached_counter_var = tk.StringVar(value="Frame —")
+        tk.Label(
+            window,
+            textvariable=self._detached_counter_var,
+            bg=DarkTheme.COLORS['bg_secondary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            font=DarkTheme.FONTS['mono'],
+            anchor=tk.W,
+        ).pack(fill=tk.X, padx=10, pady=7)
         self._detached_viewer = window
         self._detached_canvas = canvas
         self._schedule_detached_render(0)
+
+    def _set_detached_view_mode(self, mode):
+        self._detached_view_mode = mode
+        for candidate, button in getattr(self, "_detached_mode_buttons", {}).items():
+            active = candidate == mode
+            button.config(
+                bg=(
+                    DarkTheme.COLORS['accent_primary']
+                    if active
+                    else DarkTheme.COLORS['bg_tertiary']
+                ),
+                fg=(
+                    DarkTheme.COLORS['text_inverse']
+                    if active
+                    else DarkTheme.COLORS['text_primary']
+                ),
+            )
+        self._schedule_detached_render(0)
+
+    def _toggle_detached_playback(self):
+        if self._frame_review_playing:
+            self._stop_detached_playback()
+            return
+        speed = self._detached_speed_var.get()
+        if self._detached_audio_var.get() and speed != "1x":
+            speed = "1x"
+            self._detached_speed_var.set(speed)
+            self.status_var.set("Áudio da segunda tela usa velocidade 1x")
+        self.frame_review_speed_var.set(speed)
+        self.start_frame_review(1)
+        if self._detached_audio_var.get() and self._frame_review_playing:
+            self.video_player.current_frame = self.frame_manager.current_frame_index
+            self.video_player.audio_enabled = True
+            self.video_player._start_audio_playback()
+            self._detached_audio_active = True
+        self._sync_detached_play_button()
+
+    def _stop_detached_playback(self):
+        self.stop_frame_review()
+        self._sync_detached_play_button()
+
+    def _update_detached_audio(self):
+        if not self._frame_review_playing:
+            return
+        if self._detached_audio_var.get():
+            self._detached_speed_var.set("1x")
+            self.frame_review_speed_var.set("1x")
+            self.video_player.current_frame = self.frame_manager.current_frame_index
+            self.video_player.audio_enabled = True
+            self.video_player._start_audio_playback()
+            self._detached_audio_active = True
+        else:
+            self.video_player._stop_audio_playback()
+            self._detached_audio_active = False
+
+    def _sync_detached_play_button(self):
+        button = getattr(self, "_detached_play_button", None)
+        if button is not None:
+            try:
+                button.config(
+                    text=(
+                        "⏸ Pausar"
+                        if self._frame_review_playing
+                        else "▶ Reproduzir"
+                    )
+                )
+            except tk.TclError:
+                pass
+
+    @staticmethod
+    def _format_counter_time(seconds):
+        milliseconds = max(0, int(round(float(seconds) * 1000)))
+        hours, remainder = divmod(milliseconds, 3_600_000)
+        minutes, remainder = divmod(remainder, 60_000)
+        secs, millis = divmod(remainder, 1000)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
+
+    def _source_time_offset(self):
+        if not self.workspace or not self.current_video:
+            return 0.0
+        for record in self.workspace.data.get("originals", {}).values():
+            if os.path.basename(record.get("path", "")) != self.current_video:
+                continue
+            provenance = record.get("provenance", {})
+            try:
+                return float(provenance.get("start_time", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
+
+    def _update_detached_counters(self, info):
+        variable = getattr(self, "_detached_counter_var", None)
+        if variable is None:
+            return
+        fps = self._frame_review_fps()
+        project_seconds = info["index"] / fps
+        source_seconds = self._source_time_offset() + project_seconds
+        useful = self._useful_frame_range()
+        useful_seconds = max(0, info["index"] - useful.start) / fps
+        useful_duration = max(0, useful.end - useful.start + 1) / fps
+        variable.set(
+            f"Frame interno {info['index'] + 1}/{info['total']}   •   "
+            f"Projeto {self._format_counter_time(project_seconds)}   •   "
+            f"Fonte {self._format_counter_time(source_seconds)}   •   "
+            f"Trecho {self._format_counter_time(useful_seconds)} / "
+            f"{self._format_counter_time(useful_duration)}"
+        )
 
     def _toggle_detached_fullscreen(self):
         if self._detached_viewer is None:
@@ -4855,6 +5265,7 @@ class EditorScreen:
                 pass
         self._detached_viewer = None
         self._detached_canvas = None
+        self._stop_detached_playback()
 
     def _schedule_detached_render(self, delay=30):
         if self._detached_viewer is None or self._detached_canvas is None:
@@ -4870,14 +5281,29 @@ class EditorScreen:
 
     def _render_detached_frame(self):
         self._detached_render_job = None
-        if self._detached_canvas is None or self._current_display_image is None:
+        if self._detached_canvas is None or not self.frame_manager:
             return
         try:
             from PIL import Image, ImageTk
 
             width = max(1, self._detached_canvas.winfo_width())
             height = max(1, self._detached_canvas.winfo_height())
-            image = self._current_display_image.copy()
+            info = self.frame_manager.get_current_frame_info()
+            if not info:
+                return
+            original = self._load_image(info["path"])
+            result_path = self._render_source_path(info["index"])
+            result = self._load_image(result_path) if os.path.isfile(result_path) else None
+            if original is None:
+                return
+            if self._detached_view_mode == "restored" and result is not None:
+                image = result
+            elif self._detached_view_mode == "compare" and result is not None:
+                image = self._compose_compare(
+                    original, result, self._detached_compare_var.get()
+                )
+            else:
+                image = original
             image.thumbnail((width, height), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(image)
             self._detached_canvas.delete("all")
@@ -4885,12 +5311,12 @@ class EditorScreen:
                 width // 2, height // 2, image=photo, anchor=tk.CENTER
             )
             self._detached_canvas.image = photo
-            if self.frame_manager:
-                info = self.frame_manager.get_current_frame_info()
-                if info and self._detached_viewer is not None:
-                    self._detached_viewer.title(
-                        f"Benedito Digital — Frame {info['index'] + 1} / {info['total']}"
-                    )
+            if self._detached_viewer is not None:
+                self._detached_viewer.title(
+                    f"Benedito Digital — Frame {info['index'] + 1} / {info['total']}"
+                )
+            self._update_detached_counters(info)
+            self._sync_detached_play_button()
         except (tk.TclError, OSError):
             pass
 
@@ -5142,6 +5568,7 @@ class EditorScreen:
         self.status_var.set(f"Frame {info['index'] + 1}: {label}")
         self._sync_current_frame_status(info["index"])
         self._refresh_frame_catalog()
+        self._refresh_loaded_media_frame_statuses()
         self._draw_range_overview()
 
     def clear_current_frame_status(self):
@@ -5286,6 +5713,7 @@ class EditorScreen:
         def analysis_complete(result):
             self._sync_current_frame_status(self.frame_manager.current_frame_index)
             self._refresh_frame_catalog()
+            self._refresh_loaded_media_frame_statuses()
             self._draw_range_overview()
             messagebox.showinfo(
                 "Análise concluída",
@@ -5307,6 +5735,99 @@ class EditorScreen:
         except (ValueError, AttributeError):
             self.range_summary_var.set("Intervalo: não definido")
         self._draw_range_overview()
+
+    def _useful_frame_range(self):
+        total = len(self.frame_manager.frames) if self.frame_manager else 0
+        return self.frame_cut_store.get(self._camera_segment_source(), total)
+
+    def _is_frame_outside_useful_range(self, frame_index):
+        if not self.frame_manager or not self.frame_manager.frames:
+            return False
+        return not self._useful_frame_range().contains(frame_index)
+
+    def _excluded_frame_indices(self):
+        if not self.frame_manager or not self.frame_manager.frames:
+            return set()
+        useful = self._useful_frame_range()
+        return {
+            index
+            for index in range(len(self.frame_manager.frames))
+            if not useful.contains(index)
+        }
+
+    def _set_useful_range(self, start, end, description):
+        if not self.frame_manager or not self.frame_manager.frames:
+            messagebox.showinfo("Corte do projeto", "Extraia os frames primeiro.")
+            return
+        useful = self.frame_cut_store.set(
+            self._camera_segment_source(),
+            start,
+            end,
+            len(self.frame_manager.frames),
+        )
+        if self.workspace:
+            self.workspace.commit_operation(
+                "frame_cut.update",
+                payload={
+                    "source": self._camera_segment_source(),
+                    "start": useful.start,
+                    "end": useful.end,
+                    "non_destructive": True,
+                },
+            )
+        self._refresh_frame_catalog(ensure_current=True)
+        self._refresh_loaded_media_frame_statuses()
+        self._draw_range_overview()
+        self.status_var.set(
+            f"{description}: frames úteis {useful.start + 1}–{useful.end + 1}. "
+            "Originais preservados."
+        )
+
+    def set_useful_start_here(self):
+        if not self.frame_manager or not self.frame_manager.frames:
+            return
+        current = self.frame_manager.current_frame_index
+        useful = self._useful_frame_range()
+        if current == 0 and useful.start == 0:
+            self.status_var.set("O corte útil já começa no primeiro frame")
+            return
+        if not messagebox.askyesno(
+            "Definir início útil",
+            f"Retirar os frames 1–{current} do preview e do render final?\n\n"
+            "Os PNGs e o filme original não serão apagados.",
+        ):
+            return
+        self._set_useful_range(current, max(current, useful.end), "Início útil definido")
+
+    def set_useful_end_here(self):
+        if not self.frame_manager or not self.frame_manager.frames:
+            return
+        current = self.frame_manager.current_frame_index
+        useful = self._useful_frame_range()
+        if current == len(self.frame_manager.frames) - 1 and useful.end == current:
+            self.status_var.set("O corte útil já termina no último frame")
+            return
+        if not messagebox.askyesno(
+            "Definir final útil",
+            f"Retirar os frames {current + 2}–{len(self.frame_manager.frames)} do "
+            "preview e do render final?\n\nOs originais serão preservados.",
+        ):
+            return
+        self._set_useful_range(min(current, useful.start), current, "Final útil definido")
+
+    def reset_useful_range(self):
+        if not self.frame_manager or not self.frame_manager.frames:
+            return
+        self.frame_cut_store.reset(self._camera_segment_source())
+        if self.workspace:
+            self.workspace.commit_operation(
+                "frame_cut.reset",
+                payload={"source": self._camera_segment_source()},
+            )
+        self._refresh_frame_catalog(ensure_current=True)
+        self._refresh_loaded_media_frame_statuses()
+        self._draw_range_overview()
+        self.status_var.set("Filme inteiro restaurado no corte; originais preservados")
 
     def _current_work_range(self, *, show_error=False):
         total = len(self.frame_manager.frames) if self.frame_manager else 0
@@ -5369,6 +5890,27 @@ class EditorScreen:
             fill=DarkTheme.COLORS['bg_tertiary'],
             outline=DarkTheme.COLORS['border_light'],
         )
+        useful = self._useful_frame_range()
+        if useful.start > 0:
+            canvas.create_rectangle(
+                padding,
+                5,
+                position(useful.start),
+                20,
+                fill="#475569",
+                outline="",
+                stipple="gray50",
+            )
+        if useful.end < total - 1:
+            canvas.create_rectangle(
+                position(useful.end),
+                5,
+                width - padding,
+                20,
+                fill="#475569",
+                outline="",
+                stipple="gray50",
+            )
         try:
             segments = self.camera_segment_store.list(self._camera_segment_source())
         except Exception:
@@ -5524,6 +6066,10 @@ class EditorScreen:
             self._frame_review_job = None
         if was_playing and not silent:
             self.status_var.set("Revisão de frames pausada")
+        if getattr(self, "_detached_audio_active", False):
+            self.video_player._stop_audio_playback()
+            self._detached_audio_active = False
+        self._sync_detached_play_button()
 
     def _update_filmstrip(self, center_index):
         if not self.frame_manager or not hasattr(self, "filmstrip_canvas"):
@@ -6084,6 +6630,7 @@ class EditorScreen:
             self._apply_camera_segment,
             self._stabilize_camera_segment,
             self._clean_plate_camera_segment,
+            self._preview_camera_segment,
         )
 
     def _detect_camera_segments(self, dialog):
@@ -6191,11 +6738,21 @@ class EditorScreen:
 
     def _stabilize_camera_segment(self, segment):
         self._apply_camera_segment(segment)
-        self.apply_auto_stabilization_range()
+        self.apply_auto_stabilization_range(preview_segment=segment)
 
     def _clean_plate_camera_segment(self, segment):
         self._apply_camera_segment(segment)
         self.open_clean_plate_dialog()
+
+    def _preview_camera_segment(self, segment):
+        self._apply_camera_segment(segment)
+        safe_name = "".join(
+            character if character.isalnum() else "_" for character in segment.name
+        ).strip("_") or "posicionamento"
+        preview_dir = os.path.join(self.project_manager.get_exports_dir(), "previews")
+        os.makedirs(preview_dir, exist_ok=True)
+        output_path = os.path.join(preview_dir, f"{safe_name}_preview.mp4")
+        self.preview_from_frames_action(output_path=output_path, open_when_done=True)
 
     def open_clean_plate_dialog(self):
         if not self.frame_manager or len(self.frame_manager.frames) < 3:
@@ -7091,7 +7648,7 @@ class EditorScreen:
             "Centralização manual", stabilization_task, stabilization_complete
         )
 
-    def apply_auto_stabilization_range(self):
+    def apply_auto_stabilization_range(self, preview_segment=None):
         if not self.frame_manager or not self.frame_manager.frames:
             messagebox.showwarning("Aviso", "Nenhum frame carregado.")
             return
@@ -7172,6 +7729,12 @@ class EditorScreen:
             self.view_mode_label.config(text="Visualização: restaurado")
             self.show_current_frame()
             self.status_var.set(f"Estabilização automática aplicada em {done} frames")
+            if preview_segment and messagebox.askyesno(
+                "Estabilização concluída",
+                f"{preview_segment.name} foi estabilizado.\n\n"
+                "Deseja gerar e abrir uma pré-renderização agora?",
+            ):
+                self._preview_camera_segment(preview_segment)
 
         self._start_ui_job(
             "Estabilização automática", stabilization_task, stabilization_complete
@@ -7798,16 +8361,30 @@ class EditorScreen:
             frames_source = self.upscaled_dir
         render_range = bool(self.render_range_var.get())
         stabilize = bool(self.stabilize_render_var.get())
+        burn_in_counters = bool(self.burn_in_counters_var.get())
         frames = list(self.frame_manager.frames)
         try:
             start = int(self.range_start_entry.get()) - 1
             end = int(self.range_end_entry.get()) - 1
         except ValueError:
             start, end = 0, len(frames) - 1
+        useful = self._useful_frame_range()
+        if render_range:
+            start = max(start, useful.start)
+            end = min(end, useful.end)
+        else:
+            start, end = useful.start, useful.end
+        if end < start:
+            messagebox.showerror(
+                "Render",
+                "O trecho ativo não possui frames dentro do corte útil.",
+            )
+            return
 
         def render_task(context):
             source = frames_source
-            if render_range:
+            useful_is_trimmed = useful.start > 0 or useful.end < len(frames) - 1
+            if render_range or useful_is_trimmed or burn_in_counters:
                 temp_dir = os.path.join(self.video_renderer.temp_dir, "render_range")
                 os.makedirs(temp_dir, exist_ok=True)
                 for filename in os.listdir(temp_dir):
@@ -7818,10 +8395,14 @@ class EditorScreen:
                 output_index = 1
                 for position, frame_index in enumerate(indices):
                     context.check_cancelled()
-                    frame_path = os.path.join(source, frames[frame_index])
+                    frame_path = self._render_source_path(frame_index, source)
                     image = cv2.imread(frame_path, cv2.IMREAD_COLOR)
                     if image is None:
                         continue
+                    if burn_in_counters:
+                        image = self._draw_burn_in_counters(
+                            image, frame_index, fps, useful
+                        )
                     destination = os.path.join(temp_dir, f"frame_{output_index:06d}.png")
                     if not cv2.imwrite(destination, image):
                         raise RuntimeError(f"Não foi possível preparar {destination}")
@@ -7852,7 +8433,7 @@ class EditorScreen:
                 fps=fps,
                 profile=export_profile,
                 audio_source=video_path,
-                audio_start=max(0, start) / fps if render_range else 0.0,
+                audio_start=max(0, start) / fps,
                 preserve_audio=preserve_audio,
                 progress_callback=lambda progress: context.report(
                     85.0 + progress * 0.13,
@@ -7879,14 +8460,71 @@ class EditorScreen:
             return self.current_video_path
         return None
 
-    def preview_from_frames_action(self):
+    def _render_source_path(self, frame_index, preferred_dir=None):
+        filename = self.frame_manager.frames[frame_index]
+        candidates = []
+        if preferred_dir:
+            candidates.append(os.path.join(preferred_dir, filename))
+        if not preferred_dir:
+            if (
+                getattr(self, "view_upscale_var", None) is not None
+                and self.view_upscale_var.get()
+            ):
+                candidates.append(os.path.join(self.upscaled_dir, filename))
+            if self.use_manual_stab_var.get():
+                candidates.append(os.path.join(self.manual_stab_dir, filename))
+            elif self.use_auto_stab_var.get():
+                candidates.append(os.path.join(self.auto_stab_dir, filename))
+        candidates.extend(
+            [
+                os.path.join(self.restored_dir, filename),
+                os.path.join(self.frame_manager.frames_dir, filename),
+            ]
+        )
+        return next((path for path in candidates if os.path.isfile(path)), candidates[-1])
+
+    def _draw_burn_in_counters(self, image, frame_index, fps, useful):
+        project_seconds = frame_index / max(0.1, fps)
+        source_seconds = self._source_time_offset() + project_seconds
+        useful_seconds = max(0, frame_index - useful.start) / max(0.1, fps)
+        lines = (
+            f"FRAME {frame_index + 1}/{len(self.frame_manager.frames)}",
+            f"PROJETO {self._format_counter_time(project_seconds)}",
+            f"FONTE {self._format_counter_time(source_seconds)}",
+            f"TRECHO {self._format_counter_time(useful_seconds)}",
+        )
+        overlay = image.copy()
+        box_width = min(image.shape[1] - 24, 520)
+        box_height = 34 + len(lines) * 30
+        cv2.rectangle(
+            overlay,
+            (12, 12),
+            (12 + box_width, 12 + box_height),
+            (0, 0, 0),
+            -1,
+        )
+        cv2.addWeighted(overlay, 0.62, image, 0.38, 0, image)
+        for line_number, text in enumerate(lines):
+            cv2.putText(
+                image,
+                text,
+                (28, 45 + line_number * 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+        return image
+
+    def preview_from_frames_action(self, output_path=None, open_when_done=False):
         if not self.frame_manager or not self.frame_manager.frames:
             messagebox.showwarning("Aviso", "Nenhum frame encontrado.")
             return
 
-        output_path = filedialog.asksaveasfilename(
+        output_path = output_path or filedialog.asksaveasfilename(
             defaultextension=".mp4",
-            filetypes=[("MP4 files", "*.mp4"), ("All files", "*.*")]
+            filetypes=[("MP4 files", "*.mp4"), ("All files", "*.*")],
         )
         if not output_path:
             return
@@ -7897,6 +8535,15 @@ class EditorScreen:
         except ValueError:
             start = max(0, self.frame_manager.current_frame_index - 60)
             end = min(len(self.frame_manager.frames) - 1, self.frame_manager.current_frame_index + 60)
+        useful = self._useful_frame_range()
+        start = max(start, useful.start)
+        end = min(end, useful.end)
+        if end < start:
+            messagebox.showerror(
+                "Preview",
+                "O trecho ativo não possui frames dentro do corte útil.",
+            )
+            return
 
         frames_source = self.restored_dir if os.path.exists(self.restored_dir) and self.view_mode != "original" else self.frame_manager.frames_dir
         if self.use_manual_stab_var.get() and os.path.exists(self.manual_stab_dir):
@@ -7922,7 +8569,7 @@ class EditorScreen:
             output_index = 1
             for position, frame_index in enumerate(indices):
                 context.check_cancelled()
-                source = os.path.join(frames_source, frames[frame_index])
+                source = self._render_source_path(frame_index, frames_source)
                 image = cv2.imread(source, cv2.IMREAD_COLOR)
                 if image is None:
                     continue
@@ -7955,6 +8602,11 @@ class EditorScreen:
 
         def preview_complete(path):
             messagebox.showinfo("Preview concluído", f"Preview salvo em:\n{path}")
+            if open_when_done:
+                try:
+                    os.startfile(path)
+                except OSError:
+                    pass
 
         self._start_ui_job("Geração de preview", preview_task, preview_complete)
 

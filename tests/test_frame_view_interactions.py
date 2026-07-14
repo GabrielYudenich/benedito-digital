@@ -52,6 +52,14 @@ class FakeLabel:
         self.text = values.get("text", self.text)
 
 
+class FakeTree:
+    def __init__(self):
+        self.items = {}
+
+    def item(self, item, **values):
+        self.items[item] = values
+
+
 class FakeRoot:
     def __init__(self):
         self.scheduled = []
@@ -206,13 +214,65 @@ def test_review_panel_status_updates_catalog_and_timeline():
     screen._frame_review_panel = None
     updates = []
     screen._refresh_frame_catalog = lambda: updates.append("catalog")
+    screen._refresh_loaded_media_frame_statuses = lambda: updates.append("tree")
     screen._draw_range_overview = lambda: updates.append("timeline")
 
     screen._set_current_frame_status("Risco", "Risco vertical")
 
     assert stored[12] == {"status": "scratch", "note": "Risco vertical"}
-    assert updates == ["catalog", "timeline"]
+    assert updates == ["catalog", "tree", "timeline"]
     assert "Frame 13: Risco" == screen.status_var.get()
+
+
+def test_loaded_media_tree_updates_flagged_frame_label_and_color():
+    screen = object.__new__(EditorScreen)
+    screen.media_tree = FakeTree()
+    screen._media_tree_items = {
+        "frame-2": {
+            "kind": "frame",
+            "index": 1,
+            "filename": "frame_000002.png",
+        }
+    }
+    screen._frame_status_label = lambda _index: ("review", "Revisar", {})
+
+    screen._refresh_loaded_media_frame_statuses()
+
+    assert screen.media_tree.items["frame-2"] == {
+        "text": "⚠ frame_000002.png — Revisar",
+        "tags": ("review",),
+    }
+
+
+def test_second_screen_counter_time_and_source_offset():
+    screen = object.__new__(EditorScreen)
+    screen.current_video = "trecho.mov"
+    screen.workspace = SimpleNamespace(
+        data={
+            "originals": {
+                "hash": {
+                    "path": "media/originals/trecho.mov",
+                    "provenance": {"start_time": 510.0},
+                }
+            }
+        }
+    )
+
+    assert screen._format_counter_time(641.125) == "00:10:41.125"
+    assert screen._source_time_offset() == 510.0
+
+
+def test_burn_in_counters_change_rendered_frame():
+    screen = object.__new__(EditorScreen)
+    screen.frame_manager = FakeFrameManager(120)
+    screen._source_time_offset = lambda: 510.0
+    image = np.zeros((240, 640, 3), dtype=np.uint8)
+    useful = SimpleNamespace(start=30)
+
+    result = screen._draw_burn_in_counters(image, 60, 30.0, useful)
+
+    assert result is image
+    assert int(result.sum()) > 0
 
 
 def test_frame_review_plays_selected_range_without_audio_controls():

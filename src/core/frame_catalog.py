@@ -19,15 +19,19 @@ def filter_frame_indices(
     *,
     query: str = "",
     status_filter: str | None = None,
+    excluded_indices: set[int] | None = None,
 ) -> list[int]:
     normalized_query = query.strip().lower()
+    excluded = excluded_indices or set()
     exact_frame = None
     if normalized_query.isdigit():
         exact_frame = int(normalized_query) - 1
     result = []
     for index, filename in enumerate(frame_names):
         status = statuses.get(index, {}).get("status", "unmarked")
-        if status_filter and status != status_filter:
+        if status_filter == "excluded" and index not in excluded:
+            continue
+        if status_filter and status_filter != "excluded" and status != status_filter:
             continue
         if exact_frame is not None:
             if index != exact_frame:
