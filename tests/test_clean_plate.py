@@ -10,7 +10,12 @@ SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from core.clean_plate import apply_clean_plate, build_clean_plate, detect_transient_defects
+from core.clean_plate import (
+    apply_clean_plate,
+    build_clean_plate,
+    detect_transient_defects,
+    restrict_defect_mask,
+)
 
 
 def _background():
@@ -60,3 +65,20 @@ def test_clean_plate_requires_at_least_three_frames():
         assert "three frames" in str(error)
     else:
         raise AssertionError("Expected a ValueError")
+
+
+def test_shared_plate_region_is_reused_instead_of_per_frame_selection():
+    defects = np.full((20, 30), 255, dtype=np.uint8)
+    frame_selection = np.zeros_like(defects)
+    frame_selection[:, :10] = 255
+    shared_region = np.zeros_like(defects)
+    shared_region[:, 20:] = 255
+
+    restricted = restrict_defect_mask(
+        defects,
+        frame_selection=frame_selection,
+        application_region=shared_region,
+    )
+
+    assert np.count_nonzero(restricted[:, :10]) == 0
+    assert np.all(restricted[:, 20:] == 255)
