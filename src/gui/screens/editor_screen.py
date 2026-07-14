@@ -51,6 +51,7 @@ from gui.dialogs.progress_dialog import TaskProgressDialog
 from gui.dialogs.proxy_dialog import ProxyDialog
 from gui.dialogs.restoration_workflow_dialog import RestorationWorkflowDialog, VHSProcessingDialog
 from gui.dialogs.workflow_assistant import WorkflowAssistant
+from gui.mousewheel import scroll_canvas_if_within
 
 class EditorScreen:
     FRAME_STATUS_LABELS = {
@@ -1233,9 +1234,11 @@ class EditorScreen:
 
         def _on_props_mousewheel(event):
             try:
-                props_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                return scroll_canvas_if_within(
+                    event, props_canvas, props_frame
+                )
             except Exception:
-                pass
+                return None
         props_canvas.bind_all("<MouseWheel>", _on_props_mousewheel)
 
         self.video_info_label = tk.Label(
@@ -2560,10 +2563,10 @@ class EditorScreen:
         ImportModeDialog(
             self.root,
             file_path,
-            lambda mode: self._analyze_video_for_import(file_path, mode),
+            lambda selection: self._analyze_video_for_import(file_path, selection),
         )
 
-    def _analyze_video_for_import(self, file_path, mode):
+    def _analyze_video_for_import(self, file_path, selection):
         self.import_btn.config(state=tk.DISABLED)
 
         def analyze_task(context):
@@ -2580,7 +2583,7 @@ class EditorScreen:
                 file_path,
                 video_info,
                 self.project_manager.get_originals_dir(),
-                mode,
+                selection,
                 self._start_video_import,
             )
 

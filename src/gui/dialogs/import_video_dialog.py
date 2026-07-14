@@ -4,20 +4,28 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-from core.media_import import MediaImportPlanError, build_import_plan, format_timecode
+from core.media_import import (
+    MediaImportPlanError,
+    MediaImportSelection,
+    build_import_plan,
+    build_import_selection,
+    format_timecode,
+)
 from core.storage import format_bytes, storage_preflight
+from gui.mousewheel import mousewheel_units
 
 
 class ImportModeDialog:
     """Ask what should be imported before any media analysis starts."""
 
     def __init__(self, parent, source_path, confirm_callback):
+        self.parent = parent
         self.source_path = Path(source_path)
         self.confirm_callback = confirm_callback
         self.window = tk.Toplevel(parent)
         self.window.title("Escolher forma de importação")
-        self.window.geometry("640x540")
-        self.window.minsize(560, 500)
+        self.window.geometry("680x620")
+        self.window.minsize(600, 520)
         self.window.transient(parent)
         self.window.grab_set()
         self.window.configure(bg="#17131f")
@@ -28,11 +36,44 @@ class ImportModeDialog:
         self.window.bind("2", lambda _event: self._select_mode("segment"))
         self.window.bind("<Up>", lambda _event: self._select_mode("full"))
         self.window.bind("<Down>", lambda _event: self._select_mode("segment"))
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.window.bind(sequence, self._scroll_selection_body)
         self.window.columnconfigure(0, weight=1)
         self.window.rowconfigure(0, weight=1)
 
-        content = tk.Frame(self.window, bg="#17131f")
-        content.grid(row=0, column=0, sticky="nsew", padx=26, pady=(22, 12))
+        body_container = tk.Frame(self.window, bg="#17131f")
+        body_container.grid(row=0, column=0, sticky="nsew")
+        body_container.columnconfigure(0, weight=1)
+        body_container.rowconfigure(0, weight=1)
+        self.body_canvas = tk.Canvas(
+            body_container,
+            bg="#17131f",
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.body_scrollbar = ttk.Scrollbar(
+            body_container,
+            orient=tk.VERTICAL,
+            command=self.body_canvas.yview,
+        )
+        self.body_canvas.configure(yscrollcommand=self.body_scrollbar.set)
+        self.body_canvas.grid(row=0, column=0, sticky="nsew")
+        self.body_scrollbar.grid(row=0, column=1, sticky="ns")
+        content = tk.Frame(
+            self.body_canvas,
+            bg="#17131f",
+            padx=26,
+            pady=12,
+        )
+        self.body_content = content
+        body_window = self.body_canvas.create_window(
+            (0, 0), window=content, anchor="nw"
+        )
+        content.bind("<Configure>", self._sync_selection_scrollregion)
+        self.body_canvas.bind(
+            "<Configure>",
+            lambda event: self._resize_selection_body(body_window, event.width),
+        )
 
         tk.Label(
             content,
@@ -40,7 +81,7 @@ class ImportModeDialog:
             font=("Segoe UI", 22, "bold"),
             fg="#f5f3f7",
             bg="#17131f",
-        ).pack(anchor=tk.W)
+        ).pack(anchor=tk.W, pady=(10, 0))
         tk.Label(
             content,
             text=(
@@ -91,9 +132,9 @@ class ImportModeDialog:
             "anchor": tk.W,
             "justify": tk.LEFT,
             "indicatoron": False,
-            "relief": tk.RAISED,
-            "borderwidth": 2,
-            "highlightthickness": 2,
+            "relief": tk.FLAT,
+            "borderwidth": 0,
+            "highlightthickness": 1,
             "highlightbackground": "#4b3f59",
             "highlightcolor": "#c084fc",
             "padx": 14,
@@ -110,26 +151,76 @@ class ImportModeDialog:
         self.full_radio.pack(fill=tk.X, pady=(4, 6))
         self.segment_radio = tk.Radiobutton(
             options,
-            text="SOMENTE UM TRECHO\nEscolher início e final após a análise",
+            text="SOMENTE UM TRECHO\nInformar início e final nesta janela",
             value="segment",
             **radio_options,
         )
         self.segment_radio.pack(fill=tk.X, pady=(0, 4))
 
-        selection_panel = tk.Frame(content, bg="#17283a", padx=14, pady=10)
-        selection_panel.pack(fill=tk.X, pady=(10, 0))
-        self.selection_status_var = tk.StringVar()
+        self.start_var = tk.StringVar(value="00:00:00")
+        self.end_var = tk.StringVar(value="")
+        self.interval_panel = tk.Frame(content, bg="#241c31", padx=14, pady=11)
         tk.Label(
-            selection_panel,
+            self.interval_panel,
+            text="Minutagem do trecho",
+            font=("Segoe UI", 11, "bold"),
+            fg="#f5f3f7",
+            bg="#241c31",
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        tk.Label(
+            self.interval_panel,
+            text="Início (HH:MM:SS)",
+            fg="#b8afc4",
+            bg="#241c31",
+        ).grid(row=1, column=0, sticky="w", pady=(8, 3))
+        tk.Label(
+            self.interval_panel,
+            text="Final (obrigatório)",
+            fg="#b8afc4",
+            bg="#241c31",
+        ).grid(row=1, column=2, sticky="w", pady=(8, 3))
+        self.start_entry = ttk.Entry(
+            self.interval_panel, textvariable=self.start_var, width=22
+        )
+        self.start_entry.grid(row=2, column=0, sticky="ew")
+        tk.Label(
+            self.interval_panel,
+            text="até",
+            fg="#b8afc4",
+            bg="#241c31",
+        ).grid(row=2, column=1, padx=12)
+        self.end_entry = ttk.Entry(
+            self.interval_panel, textvariable=self.end_var, width=22
+        )
+        self.end_entry.grid(row=2, column=2, sticky="ew")
+        tk.Label(
+            self.interval_panel,
+            text="Exemplo: de 00:12:30 até 00:18:45",
+            font=("Segoe UI", 9),
+            fg="#b8afc4",
+            bg="#241c31",
+        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(7, 0))
+        self.interval_panel.columnconfigure(0, weight=1)
+        self.interval_panel.columnconfigure(2, weight=1)
+        self.start_entry.bind("<KeyRelease>", lambda _event: self._refresh_selection())
+        self.end_entry.bind("<KeyRelease>", lambda _event: self._refresh_selection())
+
+        self.selection_panel = tk.Frame(content, bg="#17283a", padx=14, pady=10)
+        self.selection_panel.pack(fill=tk.X, pady=(10, 0))
+        self.selection_status_var = tk.StringVar()
+        self.selection_status_label = tk.Label(
+            self.selection_panel,
             textvariable=self.selection_status_var,
             font=("Segoe UI", 10, "bold"),
             fg="#93c5fd",
             bg="#17283a",
             wraplength=540,
             justify=tk.LEFT,
-        ).pack(anchor=tk.W)
+        )
+        self.selection_status_label.pack(anchor=tk.W)
 
         footer = tk.Frame(self.window, bg="#201829", padx=26, pady=14)
+        self.footer = footer
         footer.grid(row=1, column=0, sticky="ew")
         tk.Button(
             footer,
@@ -154,6 +245,7 @@ class ImportModeDialog:
         self.confirm_button.pack(side=tk.RIGHT, padx=(0, 8))
         self._refresh_selection()
         self.full_radio.focus_set()
+        self.window.after_idle(self._fit_to_content)
 
     def _cancel(self):
         self.window.destroy()
@@ -161,7 +253,7 @@ class ImportModeDialog:
     def _select_mode(self, mode):
         self.mode_var.set(mode)
         self._refresh_selection()
-        target = self.segment_radio if mode == "segment" else self.full_radio
+        target = self.start_entry if mode == "segment" else self.full_radio
         target.focus_set()
 
     def _refresh_selection(self):
@@ -177,37 +269,120 @@ class ImportModeDialog:
         )
         self.segment_radio.config(
             text=(
-                "✓ SOMENTE UM TRECHO SELECIONADO\nEscolher início e final após a análise"
+                "✓ SOMENTE UM TRECHO SELECIONADO\nInforme início e final abaixo"
                 if segment
-                else "SOMENTE UM TRECHO\nEscolher início e final após a análise"
+                else "SOMENTE UM TRECHO\nInformar início e final nesta janela"
             ),
             relief=tk.SUNKEN if segment else tk.RAISED,
             bg="#6d28d9" if segment else "#241c31",
         )
         if segment:
-            self.selection_status_var.set(
-                "Selecionado: SOMENTE UM TRECHO. Pressione OK; depois da análise, "
-                "você informará o início e o final."
-            )
-            self.confirm_button.config(text="OK — analisar e escolher trecho")
+            if not self.interval_panel.winfo_manager():
+                self.interval_panel.pack(
+                    fill=tk.X,
+                    pady=(10, 0),
+                    before=self.selection_panel,
+                )
+            try:
+                selection = self._current_selection()
+                self.selection_status_var.set(
+                    "Trecho definido: "
+                    f"{format_timecode(selection.start_time, milliseconds=True)} até "
+                    f"{format_timecode(selection.end_time or 0, milliseconds=True)}. "
+                    "Pressione OK para analisar e revisar."
+                )
+                self.selection_status_label.config(fg="#86efac")
+                self.confirm_button.config(
+                    text="OK — analisar e revisar trecho", state=tk.NORMAL
+                )
+            except MediaImportPlanError as error:
+                self.selection_status_var.set(
+                    f"Informe um intervalo válido para continuar: {error}"
+                )
+                self.selection_status_label.config(fg="#fca5a5")
+                self.confirm_button.config(
+                    text="Informe início e final", state=tk.DISABLED
+                )
         else:
+            if self.interval_panel.winfo_manager():
+                self.interval_panel.pack_forget()
             self.selection_status_var.set(
                 "Selecionado: FILME INTEIRO. Pressione OK para analisar e revisar "
                 "a importação completa."
             )
-            self.confirm_button.config(text="OK — analisar filme inteiro")
+            self.selection_status_label.config(fg="#93c5fd")
+            self.confirm_button.config(
+                text="OK — analisar filme inteiro", state=tk.NORMAL
+            )
+        self.window.after_idle(self._fit_to_content)
+
+    def _current_selection(self) -> MediaImportSelection:
+        return build_import_selection(
+            self.mode_var.get(),
+            start_value=self.start_var.get(),
+            end_value=self.end_var.get(),
+        )
+
+    def _resize_selection_body(self, body_window, width):
+        self.body_canvas.itemconfigure(body_window, width=width)
+        self._sync_selection_scrollregion()
+
+    def _sync_selection_scrollregion(self, _event=None):
+        self.body_canvas.configure(scrollregion=self.body_canvas.bbox("all"))
+        if self.body_canvas.winfo_height() <= 1:
+            return
+        if self.body_content.winfo_reqheight() > self.body_canvas.winfo_height():
+            self.body_scrollbar.grid()
+        else:
+            self.body_scrollbar.grid_remove()
+            self.body_canvas.yview_moveto(0)
+
+    def _scroll_selection_body(self, event):
+        if self.body_content.winfo_reqheight() > self.body_canvas.winfo_height():
+            units = mousewheel_units(event)
+            if units:
+                self.body_canvas.yview_scroll(units, "units")
+        return "break"
+
+    def _fit_to_content(self):
+        if not self.window.winfo_exists():
+            return
+        self.window.update_idletasks()
+        screen_width = self.window.winfo_screenwidth()
+        screen_height = self.window.winfo_screenheight()
+        requested_width = max(
+            self.body_content.winfo_reqwidth(), self.footer.winfo_reqwidth()
+        )
+        requested_height = (
+            self.body_content.winfo_reqheight() + self.footer.winfo_reqheight()
+        )
+        width = min(max(640, requested_width + 12), screen_width - 60)
+        height = min(max(520, requested_height + 8), screen_height - 80)
+        try:
+            parent_x = self.parent.winfo_rootx()
+            parent_y = self.parent.winfo_rooty()
+            parent_width = self.parent.winfo_width()
+            parent_height = self.parent.winfo_height()
+            x = max(20, parent_x + (parent_width - width) // 2)
+            y = max(20, parent_y + (parent_height - height) // 2)
+        except tk.TclError:
+            x = max(20, (screen_width - width) // 2)
+            y = max(20, (screen_height - height) // 2)
+        self.window.geometry(f"{width}x{height}+{x}+{y}")
+        self.window.after_idle(self._sync_selection_scrollregion)
 
     def _confirm(self):
-        mode = self.mode_var.get()
-        if mode not in {"full", "segment"}:
+        try:
+            selection = self._current_selection()
+        except MediaImportPlanError as error:
             messagebox.showerror(
-                "Escolha necessária",
-                "Selecione filme inteiro ou somente um trecho.",
+                "Intervalo necessário",
+                str(error),
                 parent=self.window,
             )
             return
         self.window.destroy()
-        self.confirm_callback(mode)
+        self.confirm_callback(selection)
 
 
 class ImportVideoDialog:
@@ -219,19 +394,23 @@ class ImportVideoDialog:
         source_path,
         video_info,
         destination_dir,
-        mode,
+        selection,
         start_callback,
     ):
+        if isinstance(selection, str):
+            selection = MediaImportSelection(mode=selection)
+        mode = selection.mode
         if mode not in {"full", "segment"}:
             raise ValueError("Invalid import mode")
         self.source_path = Path(source_path)
         self.video_info = video_info or {}
         self.destination_dir = Path(destination_dir)
+        self.selection = selection
         self.mode = mode
         self.start_callback = start_callback
         self.window = tk.Toplevel(parent)
         self.window.title(
-            "Confirmar filme inteiro" if mode == "full" else "Definir trecho do filme"
+            "Confirmar filme inteiro" if mode == "full" else "Revisar trecho do filme"
         )
         screen_height = max(560, self.window.winfo_screenheight())
         dialog_height = min(680, screen_height - 100)
@@ -258,6 +437,7 @@ class ImportVideoDialog:
         )
         scrollbar = ttk.Scrollbar(body_container, orient=tk.VERTICAL, command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
+        self.body_canvas = canvas
         canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
         body = tk.Frame(canvas, bg="#17131f")
@@ -270,8 +450,10 @@ class ImportVideoDialog:
             "<Configure>",
             lambda event: canvas.itemconfigure(body_window, width=event.width),
         )
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.window.bind(sequence, self._scroll_body)
 
-        title = "Revisar filme inteiro" if mode == "full" else "Escolher início e final"
+        title = "Revisar filme inteiro" if mode == "full" else "Revisar trecho escolhido"
         tk.Label(
             body,
             text=title,
@@ -315,7 +497,11 @@ class ImportVideoDialog:
         selected_text = (
             "Escolha confirmada: filme inteiro"
             if mode == "full"
-            else "Escolha confirmada: somente um trecho"
+            else (
+                "Escolha confirmada: "
+                f"{format_timecode(selection.start_time, milliseconds=True)} até "
+                f"{format_timecode(selection.end_time or 0, milliseconds=True)}"
+            )
         )
         tk.Label(
             selected,
@@ -325,8 +511,16 @@ class ImportVideoDialog:
             bg="#17283a",
         ).pack(anchor=tk.W)
 
-        self.start_var = tk.StringVar(value="00:00:00")
-        self.end_var = tk.StringVar(value=format_timecode(duration, milliseconds=True))
+        self.start_var = tk.StringVar(
+            value=format_timecode(selection.start_time, milliseconds=True)
+        )
+        self.end_var = tk.StringVar(
+            value=(
+                format_timecode(selection.end_time, milliseconds=True)
+                if selection.end_time is not None
+                else format_timecode(duration, milliseconds=True)
+            )
+        )
         if mode == "segment":
             interval = tk.Frame(body, bg="#17131f")
             interval.pack(fill=tk.X, padx=26, pady=(16, 0))
@@ -434,6 +628,12 @@ class ImportVideoDialog:
             self.start_entry.focus_set()
         else:
             self.start_button.focus_set()
+
+    def _scroll_body(self, event):
+        units = mousewheel_units(event)
+        if units:
+            self.body_canvas.yview_scroll(units, "units")
+        return "break"
 
     def _current_plan(self):
         return build_import_plan(

@@ -81,9 +81,22 @@ class DarkTheme:
         background = "#000000" if preferences.high_contrast else cls.COLORS['bg_primary']
         foreground = "#ffffff" if preferences.high_contrast else cls.COLORS['text_primary']
         root.configure(bg=background)
-        root.option_add("*takeFocus", True)
         root.option_add("*highlightColor", focus)
-        root.option_add("*highlightThickness", 2 if preferences.large_focus else 1)
+        focus_thickness = 2 if preferences.large_focus else 1
+        for widget_class in (
+            "Button",
+            "Checkbutton",
+            "Radiobutton",
+            "Entry",
+            "Listbox",
+            "Scale",
+            "Spinbox",
+            "Text",
+        ):
+            root.option_add(f"*{widget_class}.takeFocus", True)
+            root.option_add(
+                f"*{widget_class}.highlightThickness", focus_thickness
+            )
         style.configure("TButton", focuscolor=focus, focusthickness=3 if preferences.large_focus else 1)
         style.configure("TEntry", fieldbackground=background, foreground=foreground, insertcolor=focus)
         style.configure("TCombobox", fieldbackground=background, foreground=foreground)

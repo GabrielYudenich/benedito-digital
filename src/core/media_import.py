@@ -14,6 +14,17 @@ class MediaImportPlanError(ValueError):
 
 
 @dataclass(frozen=True)
+class MediaImportSelection:
+    mode: str
+    start_time: float = 0.0
+    end_time: float | None = None
+
+    @property
+    def is_segment(self) -> bool:
+        return self.mode == "segment"
+
+
+@dataclass(frozen=True)
 class MediaImportPlan:
     mode: str
     source_path: Path
@@ -29,6 +40,24 @@ class MediaImportPlan:
     @property
     def duration(self) -> float | None:
         return None if self.end_time is None else self.end_time - self.start_time
+
+
+def build_import_selection(
+    mode: str,
+    *,
+    start_value: str = "00:00:00",
+    end_value: str = "",
+) -> MediaImportSelection:
+    """Validate the user's choice before media analysis starts."""
+    if mode == "full":
+        return MediaImportSelection(mode="full")
+    if mode != "segment":
+        raise MediaImportPlanError("Escolha filme inteiro ou somente um trecho")
+    start = parse_timecode(start_value)
+    end = parse_timecode(end_value)
+    if end <= start:
+        raise MediaImportPlanError("O final do trecho precisa ser posterior ao início")
+    return MediaImportSelection(mode="segment", start_time=start, end_time=end)
 
 
 def build_import_plan(
