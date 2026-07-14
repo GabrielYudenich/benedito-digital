@@ -37,6 +37,8 @@ from core.media_browser import paginate_frame_files
 from core.selections import polygon_mask, rectangle_mask, selection_bounds
 from core.storage import estimate_lossless_frames_bytes, require_free_space
 from core.accessibility import AccessibilityPreferences
+from core.camera_segments import CameraSegment, CameraSegmentStore, detect_camera_segments
+from core.clean_plate import apply_clean_plate, build_clean_plate, detect_transient_defects
 from gui.controllers.frame_retouch_controller import FrameRetouchController
 from gui.controllers.film_registration_controller import FilmRegistrationController
 from gui.controllers.collaboration_controller import CollaborationController
@@ -45,6 +47,8 @@ from gui.controllers.color_scopes_controller import ColorScopesController
 from gui.controllers.update_controller import UpdateController
 from gui.controllers.project_version_controller import ProjectVersionController
 from gui.dialogs.accessibility_dialog import AccessibilityDialog
+from gui.dialogs.camera_segments_dialog import CameraSegmentsDialog
+from gui.dialogs.clean_plate_dialog import CleanPlateDialog
 from gui.dialogs.damage_analysis_dialog import DamageAnalysisDialog
 from gui.dialogs.extraction_dialog import ExtractionDialog
 from gui.dialogs.import_video_dialog import ImportModeDialog, ImportVideoDialog
@@ -138,6 +142,9 @@ class EditorScreen:
         self.masks_dir = os.path.join(self.project_manager.current_project_path, "masks")
         self.auto_masks_dir = os.path.join(self.project_manager.current_project_path, "masks_auto")
         self._configure_branch_paths()
+        self.camera_segment_store = CameraSegmentStore(
+            self.project_manager.current_project_path
+        )
         self.brush_size = 12
         self.frame_zoom = 1.0
         self.frame_pan = (0.0, 0.0)
@@ -511,6 +518,7 @@ class EditorScreen:
         self.masks_dir = os.path.join(worktree, "masks")
         self.auto_masks_dir = os.path.join(worktree, "masks_auto")
         self.selections_dir = os.path.join(worktree, "selections")
+        self.clean_plates_dir = os.path.join(worktree, "clean_plates")
 
     def create_local_branch(self):
         self.version_controller.create_local_branch()
@@ -911,9 +919,9 @@ class EditorScreen:
             command=self.add_selection_to_manual_mask,
         ).pack(side=tk.LEFT, padx=4)
 
-        tk.Button(
+        auto_dust_button = tk.Menubutton(
             tools_bar,
-            text="Auto sujeira",
+            text="✦ Auto sujeira ▾",
             font=DarkTheme.FONTS['small'],
             bg=DarkTheme.COLORS['bg_tertiary'],
             fg=DarkTheme.COLORS['text_primary'],
@@ -922,7 +930,43 @@ class EditorScreen:
             padx=10,
             pady=4,
             cursor='hand2',
-            command=self.auto_select_dust_action
+        )
+        auto_dust_menu = tk.Menu(
+            auto_dust_button,
+            tearoff=0,
+            bg=DarkTheme.COLORS['bg_tertiary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            activebackground=DarkTheme.COLORS['accent_primary'],
+            activeforeground=DarkTheme.COLORS['text_inverse'],
+        )
+        auto_dust_menu.add_command(
+            label="Detectar sujeira no frame", command=self.auto_select_dust_action
+        )
+        auto_dust_menu.add_command(
+            label="Corrigir pontos detectados", command=self.repair_auto_dust_current
+        )
+        auto_dust_menu.add_separator()
+        auto_dust_menu.add_command(
+            label="Ocultar/mostrar pontos", command=self.toggle_auto_mask_overlay
+        )
+        auto_dust_menu.add_command(
+            label="Limpar detecção do frame", command=self.clear_auto_mask_current
+        )
+        auto_dust_button.configure(menu=auto_dust_menu)
+        auto_dust_button.pack(side=tk.LEFT, padx=4)
+
+        tk.Button(
+            tools_bar,
+            text="▣ Placa limpa",
+            font=DarkTheme.FONTS['small'],
+            bg=DarkTheme.COLORS['bg_tertiary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            relief=tk.FLAT,
+            bd=0,
+            padx=10,
+            pady=4,
+            cursor='hand2',
+            command=self.open_clean_plate_dialog,
         ).pack(side=tk.LEFT, padx=4)
 
         brush_frame = tk.Frame(tools_bar, bg=DarkTheme.COLORS['bg_secondary'])
@@ -980,18 +1024,6 @@ class EditorScreen:
             )
             btn.pack(side=tk.LEFT, padx=2)
 
-        self.frame_bottom_toggle_btn = tk.Button(
-            nav_frame,
-            text="⌄ Ocultar painel inferior",
-            command=self.toggle_frame_bottom_panel,
-            bg=DarkTheme.COLORS['bg_tertiary'],
-            fg=DarkTheme.COLORS['text_primary'],
-            relief=tk.FLAT,
-            padx=8,
-            pady=4,
-            cursor='hand2',
-        )
-        self.frame_bottom_toggle_btn.pack(side=tk.RIGHT, padx=3)
         tk.Button(
             nav_frame,
             text="⧉ Segunda tela",
@@ -1178,6 +1210,28 @@ class EditorScreen:
             padx=9,
             pady=4,
         ).pack(side=tk.RIGHT, padx=3)
+        self.frame_bottom_toggle_btn = tk.Button(
+            annotation_bar,
+            text="⌄ Ocultar miniaturas",
+            command=self.toggle_frame_bottom_panel,
+            bg=DarkTheme.COLORS['bg_tertiary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            relief=tk.FLAT,
+            padx=9,
+            pady=4,
+            cursor='hand2',
+        )
+        self.frame_bottom_toggle_btn.pack(side=tk.RIGHT, padx=3)
+        tk.Button(
+            annotation_bar,
+            text="🎥 Cenas/câmeras...",
+            command=self.open_camera_segments_dialog,
+            bg=DarkTheme.COLORS['bg_tertiary'],
+            fg=DarkTheme.COLORS['text_primary'],
+            relief=tk.FLAT,
+            padx=9,
+            pady=4,
+        ).pack(side=tk.LEFT, padx=3)
 
         self.range_summary_var = tk.StringVar(value="Intervalo: todos os frames")
         tk.Label(
@@ -1188,10 +1242,15 @@ class EditorScreen:
             bg=DarkTheme.COLORS['bg_secondary'],
         ).pack(side=tk.RIGHT, padx=12)
 
+        self.frame_collapsible_panel = tk.Frame(
+            self.frame_bottom_panel, bg=DarkTheme.COLORS['bg_primary']
+        )
+        self.frame_collapsible_panel.pack(fill=tk.X)
+
         # Frame navigation slider (timeline)
         self.frame_slider_var = tk.IntVar(value=1)
         self.frame_slider = ttk.Scale(
-            self.frame_bottom_panel,
+            self.frame_collapsible_panel,
             from_=1,
             to=1,
             orient=tk.HORIZONTAL,
@@ -1201,7 +1260,7 @@ class EditorScreen:
         self.frame_slider.pack(fill=tk.X, padx=10, pady=(0, 10))
 
         self.filmstrip_panel = tk.Frame(
-            self.frame_bottom_panel, bg=DarkTheme.COLORS['bg_primary']
+            self.frame_collapsible_panel, bg=DarkTheme.COLORS['bg_primary']
         )
         self.filmstrip_panel.pack(fill=tk.X)
 
@@ -3409,7 +3468,9 @@ class EditorScreen:
             self._start_spatial_selection(event, tool)
         elif tool in {"clone", "heal"}:
             self._start_retouch(event, tool)
-        else:
+        elif tool == "erase":
+            self._on_erase_start(event)
+        elif tool == "brush":
             self._on_paint_start(event)
 
     def _on_primary_move(self, event):
@@ -3418,7 +3479,9 @@ class EditorScreen:
             self._move_spatial_selection(event, tool)
         elif tool in {"clone", "heal"}:
             self._move_retouch(event)
-        else:
+        elif tool == "erase":
+            self._on_erase_move(event)
+        elif tool == "brush":
             self._on_paint_move(event)
 
     def _on_primary_end(self, event):
@@ -3427,7 +3490,9 @@ class EditorScreen:
             self._finish_spatial_selection(event, tool)
         elif tool in {"clone", "heal"}:
             self._finish_retouch(event)
-        else:
+        elif tool == "erase":
+            self._on_erase_end(event)
+        elif tool == "brush":
             self._on_paint_end(event)
 
     def _on_secondary_start(self, event):
@@ -3810,31 +3875,7 @@ class EditorScreen:
 
     def _compose_auto_dust_mask(self, bgr_img, prev_bgr=None, next_bgr=None):
         try:
-            gray = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
-            # high-frequency detail to catch dust/scratches
-            blur = cv2.GaussianBlur(gray, (3, 3), 0)
-            high = cv2.absdiff(gray, blur)
-            _, high_mask = cv2.threshold(high, 18, 255, cv2.THRESH_BINARY)
-
-            # temporal mask
-            temp_mask = None
-            if prev_bgr is not None and next_bgr is not None:
-                prev_g = cv2.cvtColor(prev_bgr, cv2.COLOR_BGR2GRAY)
-                next_g = cv2.cvtColor(next_bgr, cv2.COLOR_BGR2GRAY)
-                temp_mask = self._compose_temporal_diff_mask(prev_g, gray, next_g)
-
-            # edges
-            edge_mask = self._compose_edge_mask(gray)
-
-            # combine
-            mask = high_mask
-            if temp_mask is not None:
-                mask = cv2.bitwise_or(mask, temp_mask)
-            if edge_mask is not None:
-                mask = cv2.bitwise_or(mask, edge_mask)
-
-            mask = cv2.medianBlur(mask, 3)
-            return mask
+            return detect_transient_defects(prev_bgr, bgr_img, next_bgr)
         except Exception:
             return None
 
@@ -3909,15 +3950,45 @@ class EditorScreen:
         from PIL import ImageDraw
         draw = ImageDraw.Draw(mask)
         r = max(1, int(self.brush_size))
-        draw.ellipse((ix - r, iy - r, ix + r, iy + r), fill=value)
         stroke = getattr(self, "_active_stroke", None)
+        previous = stroke["points"][-1] if stroke and stroke["points"] else None
+        if previous is not None:
+            draw.line(
+                (previous[0], previous[1], ix, iy),
+                fill=value,
+                width=max(1, r * 2),
+            )
+        draw.ellipse((ix - r, iy - r, ix + r, iy + r), fill=value)
         if stroke is not None:
             point = [ix, iy]
             if not stroke["points"] or stroke["points"][-1] != point:
                 stroke["points"].append(point)
         self._current_mask = mask
-        self._save_current_mask()
-        self.show_current_frame()
+        canvas_radius = max(2, int(r * max(0.01, self._view_scale)))
+        preview_color = "#f43f5e" if value else "#60a5fa"
+        previous_canvas = getattr(self, "_brush_preview_canvas_point", None)
+        if previous_canvas is not None:
+            self.frame_canvas.create_line(
+                previous_canvas[0],
+                previous_canvas[1],
+                x,
+                y,
+                fill=preview_color,
+                width=max(2, canvas_radius * 2),
+                capstyle=tk.ROUND,
+                tags="brush-preview",
+            )
+        else:
+            self.frame_canvas.create_oval(
+                x - canvas_radius,
+                y - canvas_radius,
+                x + canvas_radius,
+                y + canvas_radius,
+                fill=preview_color,
+                outline="",
+                tags="brush-preview",
+            )
+        self._brush_preview_canvas_point = (x, y)
 
     def _on_paint_start(self, event):
         if getattr(self, "selected_tool", "brush") == "erase":
@@ -3926,6 +3997,8 @@ class EditorScreen:
         if getattr(self, "selected_tool", "brush") != "brush":
             return
         self._painting = True
+        self.frame_canvas.delete("brush-preview")
+        self._brush_preview_canvas_point = None
         self._push_undo_current("mask")
         info = self.frame_manager.get_current_frame_info() if self.frame_manager else None
         if info:
@@ -3946,12 +4019,14 @@ class EditorScreen:
 
     def _on_paint_end(self, event):
         self._painting = False
-        self._commit_active_stroke()
+        self._finish_brush_stroke()
 
     def _on_erase_start(self, event):
         if getattr(self, "selected_tool", "brush") not in {"brush", "erase"}:
             return
         self._erasing = True
+        self.frame_canvas.delete("brush-preview")
+        self._brush_preview_canvas_point = None
         self._push_undo_current("mask")
         info = self.frame_manager.get_current_frame_info() if self.frame_manager else None
         if info:
@@ -3972,6 +4047,14 @@ class EditorScreen:
 
     def _on_erase_end(self, event):
         self._erasing = False
+        self._finish_brush_stroke()
+
+    def _finish_brush_stroke(self):
+        if self._current_mask is not None:
+            self._save_current_mask()
+        self.frame_canvas.delete("brush-preview")
+        self._brush_preview_canvas_point = None
+        self.show_current_frame()
         self._commit_active_stroke()
 
     def _commit_active_stroke(self):
@@ -4042,17 +4125,17 @@ class EditorScreen:
         self._schedule_frame_redraw(0)
 
     def toggle_frame_bottom_panel(self):
-        if not hasattr(self, "frame_bottom_panel"):
+        if not hasattr(self, "frame_collapsible_panel"):
             return
         if self._frame_bottom_visible:
-            self.frame_bottom_panel.pack_forget()
+            self.frame_collapsible_panel.pack_forget()
             self._frame_bottom_visible = False
-            self.frame_bottom_toggle_btn.config(text="⌃ Mostrar painel inferior")
-            self.status_var.set("Painel inferior oculto — mais espaço para restauração")
+            self.frame_bottom_toggle_btn.config(text="⌃ Mostrar miniaturas")
+            self.status_var.set("Miniaturas ocultas — mais espaço para restauração")
         else:
-            self.frame_bottom_panel.pack(fill=tk.X)
+            self.frame_collapsible_panel.pack(fill=tk.X)
             self._frame_bottom_visible = True
-            self.frame_bottom_toggle_btn.config(text="⌄ Ocultar painel inferior")
+            self.frame_bottom_toggle_btn.config(text="⌄ Ocultar miniaturas")
         self.root.after_idle(self._run_frame_redraw)
 
     def open_detached_frame_viewer(self):
@@ -4932,16 +5015,385 @@ class EditorScreen:
             mask = self._compose_auto_dust_mask(curr, prev, nxt)
             if mask is None:
                 self.update_auto_mask_current(force=True)
+                mask = self._load_auto_mask(curr_path)
             else:
                 os.makedirs(self.auto_masks_dir, exist_ok=True)
                 mask_path = self._auto_mask_path_for_frame(curr_path)
                 cv2.imwrite(mask_path, mask)
+            detected_pixels = int(np.count_nonzero(mask)) if mask is not None else 0
             if hasattr(self, "show_auto_mask_var"):
-                self.show_auto_mask_var.set(True)
+                self.show_auto_mask_var.set(detected_pixels > 0)
             self.show_current_frame()
-            self.status_label.config(text="Auto-máscara inteligente aplicada.")
+            if detected_pixels:
+                self.status_label.config(
+                    text=(
+                        f"Sujeira detectada ({detected_pixels} px). "
+                        "Use Auto sujeira > Corrigir pontos detectados."
+                    )
+                )
+            else:
+                self.status_label.config(text="Nenhuma sujeira transitória segura detectada.")
         except Exception:
             self.status_label.config(text="Falha ao gerar auto-máscara.")
+
+    def toggle_auto_mask_overlay(self):
+        self.show_auto_mask_var.set(not self.show_auto_mask_var.get())
+        self.show_current_frame()
+        self.status_var.set(
+            "Pontos automáticos visíveis"
+            if self.show_auto_mask_var.get()
+            else "Pontos automáticos ocultos"
+        )
+
+    def clear_auto_mask_current(self):
+        info = self.frame_manager.get_current_frame_info() if self.frame_manager else None
+        if not info:
+            return
+        try:
+            os.remove(self._auto_mask_path_for_frame(info["path"]))
+        except FileNotFoundError:
+            pass
+        self.show_auto_mask_var.set(False)
+        self.show_current_frame()
+        self.status_var.set("Detecção automática removida do frame")
+
+    def repair_auto_dust_current(self):
+        if not self.frame_manager or not self.frame_manager.frames:
+            return
+        info = self.frame_manager.get_current_frame_info()
+        auto_mask_path = self._auto_mask_path_for_frame(info["path"])
+        if not os.path.exists(auto_mask_path):
+            self.auto_select_dust_action()
+        mask = cv2.imread(auto_mask_path, cv2.IMREAD_GRAYSCALE)
+        if mask is None or not np.any(mask):
+            messagebox.showinfo(
+                "Sem pontos seguros",
+                "Não há sujeira automática segura para corrigir neste frame.",
+            )
+            return
+        self._update_restorer_config()
+        self._push_undo_current("auto-dust")
+        frame_index = info["index"]
+        prev_path, curr_path, next_path, out_path = self._get_triplet_paths(frame_index)
+        options = {
+            "model_name": self.model_name_var.get().strip(),
+            "show_auto_mask": True,
+            "double_pass": bool(self.double_pass_var.get()),
+            "frame_index": frame_index,
+            "limit_output_to_mask": True,
+        }
+
+        def repair_task(context):
+            context.report(15, "Alinhando frames vizinhos...")
+            self._restore_triplet_to_path(
+                prev_path, curr_path, next_path, out_path, options=options
+            )
+            context.report(100, "Correção automática concluída")
+            return out_path
+
+        def repair_complete(_path):
+            if self.workspace:
+                self.workspace.commit_operation(
+                    "auto_dust.repair",
+                    payload={"automatic_mask": True},
+                    frame_number=frame_index,
+                    artifacts={"frame": out_path, "auto_mask": auto_mask_path},
+                )
+            self.view_mode = "restored"
+            self.view_mode_label.config(text="Visualização: restaurado")
+            self.show_auto_mask_var.set(False)
+            self._mark_frame_clean(curr_path)
+            self.show_current_frame()
+            self.status_var.set(
+                "Sujeira automática corrigida; marcações amarelas foram ocultadas"
+            )
+
+        self._start_ui_job("Correção de sujeira", repair_task, repair_complete)
+
+    def _camera_segment_source(self):
+        return self.current_video or getattr(self.workspace, "active_video_name", None) or os.path.basename(self.frame_manager.frames_dir)
+
+    def open_camera_segments_dialog(self):
+        if not self.frame_manager or not self.frame_manager.frames:
+            messagebox.showinfo("Sem frames", "Extraia e selecione uma sequência primeiro.")
+            return
+        try:
+            current_range = (
+                max(1, int(self.range_start_entry.get())),
+                min(len(self.frame_manager.frames), int(self.range_end_entry.get())),
+            )
+        except ValueError:
+            current_range = (1, len(self.frame_manager.frames))
+        source = self._camera_segment_source()
+        CameraSegmentsDialog(
+            self.root,
+            self.camera_segment_store.list(source),
+            current_range,
+            self._detect_camera_segments,
+            self._add_camera_segment,
+            self._delete_camera_segment,
+            self._apply_camera_segment,
+        )
+
+    def _detect_camera_segments(self, dialog):
+        frames = list(self.frame_manager.frames)
+        frames_dir = self.frame_manager.frames_dir
+        paths = [os.path.join(frames_dir, filename) for filename in frames]
+        source = self._camera_segment_source()
+        dialog.set_detecting(True)
+
+        def detection_task(context):
+            return detect_camera_segments(
+                paths,
+                progress_callback=lambda value: context.report(
+                    value, f"Comparando posições de câmera — {value:.0f}%"
+                ),
+                cancel_callback=lambda: context.cancellation_requested,
+            )
+
+        def detection_complete(segments):
+            self.camera_segment_store.replace(source, segments)
+            if self.workspace:
+                self.workspace.commit_operation(
+                    "camera_segments.detect",
+                    payload={
+                        "source": source,
+                        "segments": [
+                            {
+                                "id": item.id,
+                                "name": item.name,
+                                "start": item.start,
+                                "end": item.end,
+                                "confidence": item.confidence,
+                            }
+                            for item in segments
+                        ],
+                    },
+                )
+            try:
+                dialog.set_segments(segments)
+                dialog.set_detecting(False)
+            except tk.TclError:
+                pass
+            self.status_var.set(f"{len(segments)} cenas/câmeras detectadas")
+
+        def detection_error(error):
+            try:
+                dialog.set_detecting(False)
+            except tk.TclError:
+                pass
+            messagebox.showerror("Detecção de câmeras", error)
+
+        self._start_ui_job(
+            "Detecção de cenas", detection_task, detection_complete, detection_error
+        )
+
+    def _add_camera_segment(self, name, start, end, dialog):
+        source = self._camera_segment_source()
+        segment = CameraSegment.create(name, start - 1, end - 1)
+        self.camera_segment_store.add(source, segment)
+        dialog.set_segments(self.camera_segment_store.list(source))
+        if self.workspace:
+            self.workspace.commit_operation(
+                "camera_segment.add",
+                payload={
+                    "source": source,
+                    "id": segment.id,
+                    "name": segment.name,
+                    "start": segment.start,
+                    "end": segment.end,
+                },
+            )
+
+    def _delete_camera_segment(self, segment, dialog):
+        source = self._camera_segment_source()
+        self.camera_segment_store.delete(source, segment.id)
+        dialog.set_segments(self.camera_segment_store.list(source))
+        if self.workspace:
+            self.workspace.commit_operation(
+                "camera_segment.delete",
+                payload={"source": source, "id": segment.id},
+            )
+
+    def _apply_camera_segment(self, segment):
+        self.range_start_entry.delete(0, tk.END)
+        self.range_start_entry.insert(0, str(segment.start + 1))
+        self.range_end_entry.delete(0, tk.END)
+        self.range_end_entry.insert(0, str(segment.end + 1))
+        self._update_range_summary()
+        self.frame_manager.go_to_frame(segment.start)
+        self.show_current_frame()
+        self.update_frame_counter()
+        self.status_var.set(
+            f"Intervalo ativo: {segment.name} ({segment.start + 1}–{segment.end + 1})"
+        )
+
+    def open_clean_plate_dialog(self):
+        if not self.frame_manager or len(self.frame_manager.frames) < 3:
+            messagebox.showinfo(
+                "Placa limpa", "São necessários pelo menos três frames extraídos."
+            )
+            return
+        try:
+            start = max(0, int(self.range_start_entry.get()) - 1)
+            end = min(
+                len(self.frame_manager.frames) - 1,
+                int(self.range_end_entry.get()) - 1,
+            )
+        except ValueError:
+            messagebox.showerror("Placa limpa", "Escolha um intervalo válido.")
+            return
+        if end - start < 2:
+            messagebox.showerror(
+                "Placa limpa", "O intervalo precisa conter pelo menos três frames."
+            )
+            return
+        CleanPlateDialog(
+            self.root,
+            start + 1,
+            end + 1,
+            lambda apply_after: self._start_clean_plate(start, end, apply_after),
+        )
+
+    def _start_clean_plate(self, start, end, apply_after_build):
+        frames = list(self.frame_manager.frames)
+        frames_dir = self.frame_manager.frames_dir
+        source_paths = []
+        for frame_index, filename in enumerate(frames):
+            restored = os.path.join(self.restored_dir, filename)
+            original = os.path.join(frames_dir, filename)
+            source_paths.append(restored if os.path.exists(restored) else original)
+        sample_indices = sorted(
+            set(np.linspace(start, end, min(15, end - start + 1), dtype=int).tolist())
+        )
+        source_name = self._camera_segment_source()
+        plate_id = hashlib.sha256(
+            f"{source_name}:{start}:{end}:{self.workspace.active_branch if self.workspace else 'principal'}".encode("utf-8")
+        ).hexdigest()[:16]
+        plate_dir = os.path.join(self.clean_plates_dir, plate_id)
+        plate_path = os.path.join(plate_dir, "plate.png")
+        static_mask_path = os.path.join(plate_dir, "static_background.png")
+
+        def clean_plate_task(context):
+            samples = []
+            for position, frame_index in enumerate(sample_indices):
+                context.check_cancelled()
+                image = cv2.imread(source_paths[frame_index], cv2.IMREAD_COLOR)
+                if image is None:
+                    raise RuntimeError(f"Não foi possível ler {source_paths[frame_index]}")
+                samples.append(image)
+                context.report(
+                    (position + 1) * 25.0 / len(sample_indices),
+                    f"Lendo amostras estáticas — {position + 1}/{len(sample_indices)}",
+                )
+            plate, static_mask, diagnostics = build_clean_plate(
+                samples,
+                progress_callback=lambda value: context.report(
+                    25.0 + value * 0.35,
+                    f"Separando fundo e movimento — {value:.0f}%",
+                ),
+            )
+            os.makedirs(plate_dir, exist_ok=True)
+            if not cv2.imwrite(plate_path, plate) or not cv2.imwrite(
+                static_mask_path, static_mask
+            ):
+                raise RuntimeError("Não foi possível salvar a placa limpa")
+            if self.workspace:
+                self.workspace.commit_operation(
+                    "clean_plate.build",
+                    payload={
+                        "source": source_name,
+                        "start": start,
+                        "end": end,
+                        "diagnostics": diagnostics,
+                    },
+                    artifacts={"plate": plate_path, "background_mask": static_mask_path},
+                )
+            modified = 0
+            context.report(60, "Placa limpa criada")
+            if apply_after_build and diagnostics["camera_static"]:
+                chunk_artifacts = {}
+                for position, frame_index in enumerate(range(start, end + 1)):
+                    context.check_cancelled()
+                    current = cv2.imread(source_paths[frame_index], cv2.IMREAD_COLOR)
+                    previous = cv2.imread(
+                        source_paths[max(start, frame_index - 1)], cv2.IMREAD_COLOR
+                    )
+                    following = cv2.imread(
+                        source_paths[min(end, frame_index + 1)], cv2.IMREAD_COLOR
+                    )
+                    if current is None:
+                        continue
+                    defect_mask = detect_transient_defects(previous, current, following)
+                    for extra_path in (
+                        self._mask_path_for_frame(os.path.join(frames_dir, frames[frame_index])),
+                        self._auto_mask_path_for_frame(os.path.join(frames_dir, frames[frame_index])),
+                    ):
+                        extra = cv2.imread(extra_path, cv2.IMREAD_GRAYSCALE) if os.path.exists(extra_path) else None
+                        if extra is not None:
+                            defect_mask = cv2.bitwise_or(defect_mask, extra)
+                    selection = self._load_selection_cv(
+                        os.path.join(frames_dir, frames[frame_index]), frame_index
+                    )
+                    if selection is not None:
+                        defect_mask = cv2.bitwise_and(defect_mask, selection)
+                    restored, frame_diagnostics = apply_clean_plate(
+                        current, plate, static_mask, defect_mask
+                    )
+                    if frame_diagnostics["replaced_pixels"]:
+                        output = os.path.join(self.restored_dir, frames[frame_index])
+                        os.makedirs(self.restored_dir, exist_ok=True)
+                        if not cv2.imwrite(output, restored):
+                            raise RuntimeError(f"Não foi possível salvar {output}")
+                        chunk_artifacts[f"frame_{frame_index:09d}"] = output
+                        modified += 1
+                    if len(chunk_artifacts) >= 24 or frame_index == end:
+                        if self.workspace and chunk_artifacts:
+                            self.workspace.commit_operation(
+                                "clean_plate.apply",
+                                payload={
+                                    "plate_id": plate_id,
+                                    "start": start,
+                                    "end": end,
+                                    "foreground_protection": True,
+                                },
+                                artifacts=chunk_artifacts,
+                            )
+                        chunk_artifacts = {}
+                    context.report(
+                        60.0 + (position + 1) * 40.0 / (end - start + 1),
+                        f"Aplicando somente no fundo — {position + 1}/{end - start + 1}",
+                    )
+            return {
+                "diagnostics": diagnostics,
+                "modified": modified,
+                "applied": bool(apply_after_build and diagnostics["camera_static"]),
+            }
+
+        def clean_plate_complete(result):
+            diagnostics = result["diagnostics"]
+            if apply_after_build and not diagnostics["camera_static"]:
+                messagebox.showwarning(
+                    "Câmera não estática",
+                    "A placa foi criada para inspeção, mas não foi aplicada. Separe uma cena menor ou estabilize o intervalo primeiro.",
+                )
+            elif result["applied"]:
+                self.view_mode = "restored"
+                self.view_mode_label.config(text="Visualização: restaurado")
+                self.show_current_frame()
+                messagebox.showinfo(
+                    "Placa limpa concluída",
+                    f"Fundo estável: {diagnostics['static_ratio'] * 100:.1f}%\nFrames modificados: {result['modified']}\nPessoas e movimentos grandes foram protegidos.",
+                )
+            else:
+                messagebox.showinfo(
+                    "Placa limpa criada",
+                    f"Fundo estável identificado: {diagnostics['static_ratio'] * 100:.1f}%.",
+                )
+
+        self._start_ui_job(
+            "Placa limpa de fundo", clean_plate_task, clean_plate_complete
+        )
 
     def go_to_frame_action(self):
         if not self.frame_manager:
@@ -5128,6 +5580,7 @@ class EditorScreen:
         if prev is None or curr is None or nxt is None:
             raise FileNotFoundError("Nao foi possivel carregar frames para restauracao")
 
+        original_curr = curr.copy()
         h, w = curr.shape[:2]
         prev = cv2.resize(prev, (w, h), interpolation=cv2.INTER_AREA)
         nxt = cv2.resize(nxt, (w, h), interpolation=cv2.INTER_AREA)
@@ -5206,10 +5659,17 @@ class EditorScreen:
             show_auto_mask = self.show_auto_mask_var.get()
         if show_auto_mask:
             try:
-                auto_mask = self.restorer.build_automask(curr)
+                auto_mask_path = self._auto_mask_path_for_frame(curr_path)
+                auto_mask = cv2.imread(
+                    auto_mask_path, cv2.IMREAD_GRAYSCALE
+                ) if os.path.exists(auto_mask_path) else None
+                if auto_mask is None:
+                    auto_mask = self.restorer.build_automask(curr)
                 mask = auto_mask if mask is None else cv2.bitwise_or(mask, auto_mask)
             except Exception:
                 pass
+        if selection_mask is not None and mask is not None:
+            mask = cv2.bitwise_and(mask, selection_mask)
 
         restored, _ = self.restorer.restore_triplet(prev, curr, nxt, mask=mask)
         double_pass = options.get("double_pass")
@@ -5217,6 +5677,15 @@ class EditorScreen:
             double_pass = self.double_pass_var.get()
         if double_pass:
             restored, _ = self.restorer.restore_triplet(prev, restored, nxt, mask=mask)
+        output_limit = selection_mask
+        if options.get("limit_output_to_mask") and mask is not None:
+            output_limit = (
+                mask
+                if output_limit is None
+                else cv2.bitwise_and(output_limit, mask)
+            )
+        if output_limit is not None:
+            restored[output_limit == 0] = original_curr[output_limit == 0]
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         cv2.imwrite(out_path, restored)
 
