@@ -38,11 +38,17 @@ def test_focus_borders_are_limited_to_interactive_widgets(monkeypatch):
             options.append((pattern, value))
 
     class FakeStyle:
+        configured = []
+        mapped = []
+
         def __init__(self, _root):
             return None
 
-        def configure(self, _name, **_values):
-            return None
+        def configure(self, name, **values):
+            self.configured.append((name, values))
+
+        def map(self, name, **values):
+            self.mapped.append((name, values))
 
     monkeypatch.setattr("gui.themes.dark_theme.ttk.Style", FakeStyle)
 
@@ -56,3 +62,11 @@ def test_focus_borders_are_limited_to_interactive_widgets(monkeypatch):
     assert "*Button.highlightThickness" in patterns
     assert "*Radiobutton.takeFocus" in patterns
     assert not any("Label.highlightThickness" in pattern for pattern in patterns)
+    popup_options = dict(options)
+    assert popup_options["*TCombobox*Listbox.background"] == DarkTheme.COLORS["bg_tertiary"]
+    assert popup_options["*TCombobox*Listbox.foreground"] == DarkTheme.COLORS["text_primary"]
+    combo_config = next(
+        values for name, values in FakeStyle.configured if name == "TCombobox"
+    )
+    assert combo_config["fieldbackground"] == DarkTheme.COLORS["bg_primary"]
+    assert combo_config["foreground"] == DarkTheme.COLORS["text_primary"]
