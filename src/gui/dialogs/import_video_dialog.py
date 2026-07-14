@@ -32,10 +32,10 @@ class ImportModeDialog:
         self.window.protocol("WM_DELETE_WINDOW", self._cancel)
         self.window.bind("<Escape>", lambda _event: self._cancel())
         self.window.bind("<Return>", lambda _event: self._confirm())
-        self.window.bind("1", lambda _event: self._select_mode("full"))
-        self.window.bind("2", lambda _event: self._select_mode("segment"))
-        self.window.bind("<Up>", lambda _event: self._select_mode("full"))
-        self.window.bind("<Down>", lambda _event: self._select_mode("segment"))
+        self.window.bind("1", lambda event: self._mode_shortcut(event, "full"))
+        self.window.bind("2", lambda event: self._mode_shortcut(event, "segment"))
+        self.window.bind("<Up>", lambda event: self._mode_shortcut(event, "full"))
+        self.window.bind("<Down>", lambda event: self._mode_shortcut(event, "segment"))
         for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
             self.window.bind(sequence, self._scroll_selection_body)
         self.window.columnconfigure(0, weight=1)
@@ -255,6 +255,20 @@ class ImportModeDialog:
         self._refresh_selection()
         target = self.start_entry if mode == "segment" else self.full_radio
         target.focus_set()
+
+    def _mode_shortcut(self, event, mode):
+        widget_class = event.widget.winfo_class()
+        if widget_class in {
+            "Entry",
+            "TEntry",
+            "Text",
+            "TCombobox",
+            "Spinbox",
+            "TSpinbox",
+        }:
+            return None
+        self._select_mode(mode)
+        return "break"
 
     def _refresh_selection(self):
         segment = self.mode_var.get() == "segment"
