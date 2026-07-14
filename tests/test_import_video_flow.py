@@ -65,6 +65,14 @@ class FakeBodyContent:
         return self.required_height
 
 
+class FakeInputWidget:
+    def __init__(self, widget_class):
+        self.widget_class = widget_class
+
+    def winfo_class(self):
+        return self.widget_class
+
+
 class FakeVariable:
     def __init__(self, value=""):
         self.value = value
@@ -226,3 +234,17 @@ def test_import_choice_consumes_wheel_without_scrolling_background():
     dialog.body_content.required_height = 200
     assert dialog._scroll_selection_body(event) == "break"
     assert dialog.body_canvas.scrolls == [(1, "units")]
+
+
+def test_number_shortcuts_do_not_steal_time_entry_digits():
+    dialog = object.__new__(ImportModeDialog)
+    selected_modes = []
+    dialog._select_mode = selected_modes.append
+
+    entry_event = SimpleNamespace(widget=FakeInputWidget("TEntry"))
+    assert dialog._mode_shortcut(entry_event, "full") is None
+    assert selected_modes == []
+
+    card_event = SimpleNamespace(widget=FakeInputWidget("Radiobutton"))
+    assert dialog._mode_shortcut(card_event, "segment") == "break"
+    assert selected_modes == ["segment"]

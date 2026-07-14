@@ -295,6 +295,22 @@ def test_resolve_frame_source_prefers_branch_artifact_then_original(tmp_path):
     assert resolved["artifact"]["sha256"] == operation["artifacts"]["frame"]["sha256"]
 
 
+def test_resolve_frame_source_uses_active_media_directory(tmp_path):
+    workspace = ProjectWorkspace.initialize(tmp_path / "project")
+    first_dir = workspace.get_frames_dir("rolo-1.mov")
+    second_dir = workspace.get_frames_dir("rolo-2.mov")
+    first = first_dir / "frame_000001.png"
+    second = second_dir / "frame_000001.png"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+
+    workspace.active_video_name = "rolo-2.mov"
+    resolved = workspace.resolve_frame_source(0)
+
+    assert first_dir != second_dir
+    assert resolved == {"path": second, "kind": "original", "artifact": None}
+
+
 def test_original_is_registered_and_verified_without_copying(tmp_path):
     workspace = ProjectWorkspace.initialize(tmp_path / "project")
     original = workspace.originals_dir / "scan.mov"
