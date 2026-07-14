@@ -21,8 +21,8 @@ análise. No modo de trecho, início e final ficam na própria janela inicial. A
 metadados começa somente depois da confirmação e leva a uma segunda tela de revisão:
 
 - **Filme inteiro** copia e verifica o arquivo completo em streaming;
-- **Somente um trecho** recebe início e final em `HH:MM:SS` antes da análise e cria um
-  MKV lossless;
+- **Somente um trecho** recebe início e final em `HH:MM:SS` antes da análise e oferece
+  MKV/FFV1 sem perdas, MOV/ProRes 422 HQ ou MP4/H.264 de alta qualidade;
 - ambos mostram dados estimados, espaço livre e reserva de segurança antes de começar.
 
 Proxy e frames são etapas diferentes. O proxy é pequeno e serve ao player de referência;
@@ -31,9 +31,16 @@ confirmação própria. A árvore `Mídia` mostra `Frames (0)` e a ação de ext
 sequência não existe. Depois, mostra páginas de 100 quadros sem criar milhares de linhas de
 interface ao mesmo tempo.
 
-O trecho usa FFV1 intraframe e áudio PCM. Ele não adiciona uma compressão destrutiva antes
-da restauração, mas pode ser maior que um vídeo de entrega comum. A origem recebe registro
-de proveniência com nome, tamanho, data, intervalo e codecs usados.
+O padrão recomendado usa MKV com FFV1 intraframe e áudio PCM. Ele não adiciona compressão
+destrutiva antes da restauração, mas pode ser maior que um vídeo de entrega comum. MOV com
+ProRes 422 HQ e PCM oferece ampla compatibilidade profissional, com compressão visualmente
+sem perdas. MP4 com H.264 e AAC gera um arquivo menor, porém com perdas, e deve ser usado
+como cópia prática ou entrega, não como matriz de preservação.
+
+Durante a análise do trecho, uma amostra dos dois primeiros canais é medida. Se apenas um
+lado tiver sinal, a revisão recomenda duplicar esse canal nos dois lados. Também é possível
+preservar os canais exatamente como chegaram ou misturá-los ao centro. A escolha afeta
+somente a cópia de trabalho e fica registrada na proveniência.
 
 Para o primeiro ensaio com um `.mov` de 30 GB:
 

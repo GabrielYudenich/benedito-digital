@@ -14,10 +14,14 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 **2. Importar vídeo**
 1. Na aba `Mídia`, clique em `+` e selecione o arquivo.
 2. Escolha filme inteiro ou informe início e final do trecho antes da análise.
-3. Revise a importação e, se desejar, crie o proxy leve.
-4. Selecione a fonte na árvore e use `▶` para reproduzir. Marque ou desmarque
+3. Para um trecho, escolha o formato de trabalho: `MKV sem perdas` é recomendado para
+   preservação, `MOV ProRes` prioriza compatibilidade de edição e `MP4` ocupa menos espaço.
+4. Revise a análise de áudio. Se um canal estiver silencioso, o Benedito recomenda
+   duplicar o canal ativo nos dois lados; a origem permanece intocada.
+5. Confirme a importação e, se desejar, crie o proxy leve.
+6. Selecione a fonte na árvore e use `▶` para reproduzir. Marque ou desmarque
    `Reproduzir áudio` abaixo do player.
-5. O vídeo e o proxy são referências. A restauração acontece nos frames.
+7. O vídeo e o proxy são referências. A restauração acontece nos frames.
 
 **3. Extrair frames**
 1. Expanda a fonte em `Mídia > Frames` e clique em `Extrair frames sem perda`, ou use

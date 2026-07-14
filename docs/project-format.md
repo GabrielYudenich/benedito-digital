@@ -104,10 +104,15 @@ Um original registrado recebe SHA-256, tamanho e caminho. O arquivo nao e copiad
 o armazenamento de objetos. A verificacao posterior detecta substituicao ou corrupcao
 do material de origem.
 
-Um trecho lossless passa a ser um original de trabalho independente e recebe `provenance`
-com o nome e tamanho da fonte, data de modificacao, inicio, final e codecs. A fonte de 30 GB
-nao entra no historico nem no pacote colaborativo. O segmento usa FFV1 e PCM para evitar
-uma nova perda antes da edicao frame a frame.
+Um trecho passa a ser um original de trabalho independente e recebe `provenance` com nome
+e tamanho da fonte, data de modificacao, inicio, final, container, codecs, formato de
+trabalho e tratamento de audio. A fonte de 30 GB nao entra no historico nem no pacote
+colaborativo. O formato recomendado usa MKV, FFV1 e PCM para evitar uma nova perda antes da
+edicao frame a frame. MOV/ProRes e MP4/H.264 permanecem opcoes explicitas de compatibilidade.
+
+O campo `audio_mode` registra `preserve`, `dual_mono_left`, `dual_mono_right` ou `mono_mix`.
+Assim, a centralizacao de uma gravacao presente em apenas um canal e auditavel e nunca
+altera silenciosamente o material de origem.
 
 ## Sincronizacao e merge local
 

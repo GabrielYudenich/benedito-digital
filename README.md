@@ -21,7 +21,9 @@ A branch `develop` concentra a validação da próxima versão. A fundação atu
 
 - importação transacional de originais grandes, com SHA-256, progresso e cancelamento;
 - escolha guiada entre importar o filme inteiro ou definir a minutagem de um trecho
-  lossless antes da análise;
+  em MKV/FFV1 sem perdas, MOV/ProRes ou MP4 de alta qualidade antes da análise;
+- análise dos canais de áudio com correção opcional de gravações presentes em apenas
+  um lado, sem modificar o arquivo original;
 - preflight de espaço para importação e extração de frames antes de tarefas longas;
 - registro de projetos existentes em qualquer pasta local ou compartilhada, sem copiar a mídia;
 - extração de frames em PNG sem perda por FFmpeg;

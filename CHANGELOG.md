@@ -23,6 +23,8 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - estimativa e preflight de espaço livre para importação e sequências PNG.
 - árvore de mídia por fonte com proxies e frames paginados;
 - player de referência com áudio opcional por FFplay.
+- formatos de trecho selecionáveis: MKV/FFV1, MOV/ProRes 422 HQ e MP4/H.264;
+- análise de canais e centralização opcional de áudio presente somente em um lado.
 
 ### Alterado
 
