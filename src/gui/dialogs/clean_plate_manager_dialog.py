@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
+from core.clean_plate import compose_plate_layer
 from core.retouch import apply_retouch_dab
 
 
@@ -24,11 +25,13 @@ class CleanPlateManagerDialog:
         edit_callback,
         reapply_callback,
         rebuild_callback,
+        correction_callback,
     ):
         self.records = list(records)
         self.edit_callback = edit_callback
         self.reapply_callback = reapply_callback
         self.rebuild_callback = rebuild_callback
+        self.correction_callback = correction_callback
         self.window = tk.Toplevel(parent)
         self.window.title("Placas limpas do projeto")
         self.window.geometry("1180x700")
@@ -45,8 +48,8 @@ class CleanPlateManagerDialog:
         ttk.Label(
             container,
             text=(
-                "A placa é uma imagem de referência do fundo. Ela só substitui poeira e "
-                "defeitos pequenos detectados em áreas consideradas estáticas."
+                "A placa preserva somente o fundo comprovadamente estático. Pessoas e objetos "
+                "em movimento ficam transparentes e são protegidos novamente em cada frame."
             ),
             wraplength=900,
         ).pack(anchor=tk.W, pady=(4, 14))
@@ -113,6 +116,12 @@ class CleanPlateManagerDialog:
             command=self._reapply,
         )
         self.reapply_button.pack(side=tk.LEFT)
+        self.correction_button = ttk.Button(
+            footer,
+            text="Corrigir movimento no frame atual...",
+            command=self._correct_current_frame,
+        )
+        self.correction_button.pack(side=tk.LEFT, padx=(8, 0))
 
         for index, record in enumerate(self.records):
             ratio = float(record.diagnostics.get("static_ratio", 0.0)) * 100.0
@@ -134,6 +143,7 @@ class CleanPlateManagerDialog:
             self.edit_button,
             self.rebuild_button,
             self.reapply_button,
+            self.correction_button,
         ):
             button.configure(state=state)
         if self.records:
@@ -152,10 +162,19 @@ class CleanPlateManagerDialog:
         if record is None:
             return
         try:
-            with Image.open(record.plate_path) as image:
-                preview = image.convert("RGB")
+            preview_path = record.transparent_plate_path or record.plate_path
+            with Image.open(preview_path) as image:
+                preview = image.convert("RGBA")
                 preview.thumbnail((490, 390), Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(preview)
+                checker = Image.new("RGB", preview.size, (54, 48, 63))
+                pixels = checker.load()
+                square = 14
+                for y in range(preview.height):
+                    for x in range(preview.width):
+                        if (x // square + y // square) % 2:
+                            pixels[x, y] = (80, 72, 92)
+                checker.paste(preview, mask=preview.getchannel("A"))
+                photo = ImageTk.PhotoImage(checker)
         except Exception:
             self.preview.configure(image="", text="Não foi possível abrir a placa")
             self.preview.image = None
@@ -170,12 +189,24 @@ class CleanPlateManagerDialog:
             if sharpness is not None
             else "Placa antiga: recrie o mesmo trecho para usar a nova base nítida.\n"
         )
+        transparency = (
+            "Movimento: transparente na placa RGBA\n"
+            if record.transparent_plate_path
+            else "Placa antiga sem alpha: recrie para tornar movimento transparente.\n"
+        )
+        layer_status = (
+            "Camada não destrutiva: ativa — correções podem revelar o original\n"
+            if record.layer_metadata_path
+            else "Camada não destrutiva: ainda não aplicada\n"
+        )
         self.details_var.set(
             f"ID: {record.plate_id}\n"
             f"Trecho: frames {record.start + 1}–{record.end + 1} "
             f"({record.frame_count} frames)\n"
             f"Fundo estável: {ratio:.1f}%  •  movimento médio: {motion:.2f} px\n"
             f"{quality}"
+            f"{transparency}"
+            f"{layer_status}"
             f"Frames efetivamente alterados: {record.modified_frames}\n"
             f"Arquivo: {record.plate_path}"
         )
@@ -220,6 +251,11 @@ class CleanPlateManagerDialog:
         record = self.selected_record()
         if record is not None:
             self.rebuild_callback(record)
+
+    def _correct_current_frame(self):
+        record = self.selected_record()
+        if record is not None:
+            self.correction_callback(record, self.window)
 
 
 class CleanPlateApplicationDialog:
@@ -285,6 +321,253 @@ class CleanPlateApplicationDialog:
         mode = self.mode_var.get()
         self.window.destroy()
         self.apply_callback(mode)
+
+
+class CleanPlateRevealDialog:
+    def __init__(
+        self,
+        parent,
+        frame_number,
+        source_path,
+        composite_path,
+        reveal_mask_path,
+        save_callback,
+    ):
+        self.source = cv2.imread(str(source_path), cv2.IMREAD_COLOR)
+        self.composite = cv2.imread(str(composite_path), cv2.IMREAD_COLOR)
+        if self.source is None or self.composite is None:
+            raise RuntimeError("A camada ou o frame-base não pôde ser aberto")
+        if self.source.shape[:2] != self.composite.shape[:2]:
+            self.source = cv2.resize(
+                self.source,
+                (self.composite.shape[1], self.composite.shape[0]),
+                interpolation=cv2.INTER_CUBIC,
+            )
+        existing = (
+            cv2.imread(str(reveal_mask_path), cv2.IMREAD_GRAYSCALE)
+            if os.path.isfile(reveal_mask_path)
+            else None
+        )
+        self.reveal_mask = (
+            cv2.resize(
+                existing,
+                (self.composite.shape[1], self.composite.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+            if existing is not None
+            else np.zeros(self.composite.shape[:2], dtype=np.uint8)
+        )
+        self.save_callback = save_callback
+        self.undo_stack = []
+        self.redo_stack = []
+        self.last_point = None
+        self.zoom = 1.0
+        self.pan = [0.0, 0.0]
+        self.pan_start = None
+        self.pan_origin = None
+        self.photo = None
+        self.redraw_job = None
+
+        self.window = tk.Toplevel(parent)
+        self.window.title(f"Corrigir camada da placa — frame {frame_number}")
+        self.window.geometry("1240x820")
+        self.window.minsize(900, 650)
+        self.window.transient(parent)
+
+        toolbar = ttk.Frame(self.window, padding=10)
+        toolbar.pack(fill=tk.X)
+        self.tool_var = tk.StringVar(value="reveal")
+        ttk.Radiobutton(
+            toolbar,
+            text="◉ Revelar frame original",
+            variable=self.tool_var,
+            value="reveal",
+        ).pack(side=tk.LEFT)
+        ttk.Radiobutton(
+            toolbar,
+            text="▣ Restaurar camada da placa",
+            variable=self.tool_var,
+            value="restore",
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Label(toolbar, text="Pincel:").pack(side=tk.LEFT, padx=(18, 5))
+        self.brush_size = tk.IntVar(value=28)
+        ttk.Scale(
+            toolbar,
+            from_=3,
+            to=180,
+            variable=self.brush_size,
+            orient=tk.HORIZONTAL,
+            length=170,
+        ).pack(side=tk.LEFT)
+        ttk.Button(toolbar, text="Desfazer", command=self._undo).pack(side=tk.LEFT, padx=(16, 4))
+        ttk.Button(toolbar, text="Refazer", command=self._redo).pack(side=tk.LEFT)
+
+        self.preview_mode = tk.StringVar(value="corrected")
+        for value, label in (
+            ("corrected", "Com correção"),
+            ("composite", "Somente placa"),
+            ("source", "Camada inferior"),
+        ):
+            ttk.Radiobutton(
+                toolbar,
+                text=label,
+                variable=self.preview_mode,
+                value=value,
+                command=self._schedule_redraw,
+            ).pack(side=tk.RIGHT, padx=(7, 0))
+
+        self.canvas = tk.Canvas(
+            self.window,
+            bg="#08060d",
+            highlightthickness=0,
+            cursor="crosshair",
+        )
+        self.canvas.pack(fill=tk.BOTH, expand=True, padx=10)
+        self.canvas.bind("<Configure>", self._schedule_redraw)
+        self.canvas.bind("<ButtonPress-1>", self._paint_start)
+        self.canvas.bind("<B1-Motion>", self._paint_move)
+        self.canvas.bind("<ButtonRelease-1>", self._paint_end)
+        self.canvas.bind("<ButtonPress-2>", self._pan_start)
+        self.canvas.bind("<B2-Motion>", self._pan_move)
+        self.canvas.bind("<MouseWheel>", self._zoom_wheel)
+
+        footer = ttk.Frame(self.window, padding=10)
+        footer.pack(fill=tk.X)
+        ttk.Label(
+            footer,
+            text=(
+                "Pinte sobre braços, rostos ou objetos apagados. Amarelo indica onde "
+                "a camada inferior será revelada. Use o botão do meio para mover."
+            ),
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(footer, text="Cancelar", command=self.window.destroy).pack(side=tk.RIGHT)
+        ttk.Button(footer, text="Salvar correção", command=self._save).pack(side=tk.RIGHT, padx=8)
+        ttk.Button(footer, text="Ajustar à janela", command=self._fit).pack(side=tk.RIGHT)
+        self._schedule_redraw()
+
+    def _view_transform(self):
+        width = max(1, self.canvas.winfo_width())
+        height = max(1, self.canvas.winfo_height())
+        image_height, image_width = self.composite.shape[:2]
+        fit = min(width / image_width, height / image_height)
+        scale = max(0.02, fit * self.zoom)
+        left = (width - image_width * scale) / 2.0 + self.pan[0]
+        top = (height - image_height * scale) / 2.0 + self.pan[1]
+        return scale, left, top
+
+    def _image_point(self, event):
+        scale, left, top = self._view_transform()
+        x = int(round((event.x - left) / scale))
+        y = int(round((event.y - top) / scale))
+        if 0 <= x < self.composite.shape[1] and 0 <= y < self.composite.shape[0]:
+            return x, y
+        return None
+
+    def _paint_start(self, event):
+        point = self._image_point(event)
+        if point is None:
+            return
+        self.undo_stack.append(self.reveal_mask.copy())
+        del self.undo_stack[:-20]
+        self.redo_stack.clear()
+        self.last_point = point
+        self._paint(point)
+
+    def _paint_move(self, event):
+        point = self._image_point(event)
+        if point is None or self.last_point is None:
+            return
+        self._paint(point)
+        self.last_point = point
+
+    def _paint_end(self, _event):
+        self.last_point = None
+
+    def _paint(self, point):
+        value = 255 if self.tool_var.get() == "reveal" else 0
+        radius = max(2, int(self.brush_size.get()))
+        if self.last_point is None:
+            cv2.circle(self.reveal_mask, point, radius, value, -1, cv2.LINE_AA)
+        else:
+            cv2.line(
+                self.reveal_mask,
+                self.last_point,
+                point,
+                value,
+                radius * 2,
+                cv2.LINE_AA,
+            )
+        self._schedule_redraw()
+
+    def _undo(self):
+        if not self.undo_stack:
+            return
+        self.redo_stack.append(self.reveal_mask.copy())
+        self.reveal_mask = self.undo_stack.pop()
+        self._schedule_redraw()
+
+    def _redo(self):
+        if not self.redo_stack:
+            return
+        self.undo_stack.append(self.reveal_mask.copy())
+        self.reveal_mask = self.redo_stack.pop()
+        self._schedule_redraw()
+
+    def _pan_start(self, event):
+        self.pan_start = (event.x, event.y)
+        self.pan_origin = tuple(self.pan)
+
+    def _pan_move(self, event):
+        if self.pan_start is None:
+            return
+        self.pan[0] = self.pan_origin[0] + event.x - self.pan_start[0]
+        self.pan[1] = self.pan_origin[1] + event.y - self.pan_start[1]
+        self._schedule_redraw()
+
+    def _zoom_wheel(self, event):
+        self.zoom = min(8.0, max(0.35, self.zoom * (1.14 if event.delta > 0 else 1 / 1.14)))
+        self._schedule_redraw()
+
+    def _fit(self):
+        self.zoom = 1.0
+        self.pan = [0.0, 0.0]
+        self._schedule_redraw()
+
+    def _schedule_redraw(self, _event=None):
+        if self.redraw_job is None:
+            self.redraw_job = self.window.after(16, self._redraw)
+
+    def _redraw(self):
+        self.redraw_job = None
+        scale, left, top = self._view_transform()
+        width = max(1, int(round(self.composite.shape[1] * scale)))
+        height = max(1, int(round(self.composite.shape[0] * scale)))
+        source = cv2.resize(self.source, (width, height), interpolation=cv2.INTER_AREA)
+        composite = cv2.resize(self.composite, (width, height), interpolation=cv2.INTER_AREA)
+        mask = cv2.resize(self.reveal_mask, (width, height), interpolation=cv2.INTER_NEAREST)
+        mode = self.preview_mode.get()
+        if mode == "source":
+            display = source
+        elif mode == "composite":
+            display = composite
+        else:
+            display = compose_plate_layer(source, composite, mask, feather=max(0.6, 3.0 * scale))
+            if np.any(mask):
+                overlay = display.copy()
+                overlay[mask > 0] = (30, 205, 255)
+                display = cv2.addWeighted(display, 0.72, overlay, 0.28, 0)
+        rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
+        self.photo = ImageTk.PhotoImage(Image.fromarray(rgb))
+        self.canvas.delete("all")
+        self.canvas.create_image(left, top, image=self.photo, anchor=tk.NW)
+
+    def _save(self):
+        try:
+            self.save_callback(self.reveal_mask.copy())
+        except Exception as exc:
+            messagebox.showerror("Salvar correção", str(exc), parent=self.window)
+            return
+        self.window.destroy()
 
 
 class CleanPlateEditorDialog:

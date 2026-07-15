@@ -1,4 +1,5 @@
 import sys
+import json
 from pathlib import Path
 
 
@@ -54,3 +55,36 @@ def test_source_frame_prefers_active_auto_stabilization(tmp_path):
     screen.use_auto_stab_var = FakeVariable(True)
 
     assert screen._get_source_frame_path(0) == str(automatic_dir / frame_name)
+
+
+def test_clean_plate_layer_prefers_reveal_corrected_frame(tmp_path):
+    layers_dir = tmp_path / "clean_plate_layers"
+    layer_dir = layers_dir / "plate-a"
+    composite_dir = layer_dir / "composite"
+    corrected_dir = layer_dir / "corrected"
+    composite_dir.mkdir(parents=True)
+    corrected_dir.mkdir()
+    frame_name = "frame_000001.png"
+    composite = composite_dir / frame_name
+    corrected = corrected_dir / frame_name
+    composite.write_bytes(b"composite")
+    corrected.write_bytes(b"corrected")
+    (layer_dir / "layer.json").write_text(
+        json.dumps(
+            {
+                "plate_id": "plate-a",
+                "start": 0,
+                "end": 10,
+                "enabled": True,
+                "updated_at": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    screen = object.__new__(EditorScreen)
+    screen.frame_manager = FakeFrameManager(tmp_path / "originals")
+    screen.clean_plate_layers_dir = str(layers_dir)
+    screen._clean_plate_layers_cache = None
+
+    assert screen._clean_plate_layer_frame_path(0) == str(corrected)

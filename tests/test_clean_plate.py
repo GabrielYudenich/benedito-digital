@@ -13,7 +13,9 @@ if str(SRC_DIR) not in sys.path:
 from core.clean_plate import (
     apply_clean_plate,
     build_clean_plate,
+    compose_plate_layer,
     detect_transient_defects,
+    make_transparent_plate,
     restrict_defect_mask,
 )
 
@@ -116,7 +118,6 @@ def test_background_application_replaces_static_area_but_protects_subject():
     current = np.clip(current.astype(np.int16) - 16, 0, 255).astype(np.uint8)
     cv2.rectangle(current, (58, 42), (118, 112), (20, 20, 235), -1)
     static_mask = np.full(current.shape[:2], 255, dtype=np.uint8)
-    static_mask[38:117, 53:123] = 0
     whole_background = np.full(current.shape[:2], 255, dtype=np.uint8)
 
     restored, diagnostics = apply_clean_plate(
@@ -128,9 +129,36 @@ def test_background_application_replaces_static_area_but_protects_subject():
     )
 
     assert diagnostics["application_mode"] == "background"
+    assert diagnostics["dynamic_foreground_pixels"] > 0
     assert diagnostics["replaced_pixels"] > current.shape[0] * current.shape[1] * 0.45
     current_detail = cv2.Laplacian(current[:35], cv2.CV_64F).var()
     restored_detail = cv2.Laplacian(restored[:35], cv2.CV_64F).var()
     assert restored_detail > current_detail * 1.2
     assert abs(float(restored[:35].mean()) - float(current[:35].mean())) < 3
     assert np.max(cv2.absdiff(restored[52:102, 68:108], current[52:102, 68:108])) <= 5
+
+
+def test_transparent_plate_uses_static_mask_as_alpha():
+    plate = _background()
+    static_mask = np.full(plate.shape[:2], 255, dtype=np.uint8)
+    static_mask[30:90, 50:130] = 0
+
+    transparent = make_transparent_plate(plate, static_mask)
+
+    assert transparent.shape[2] == 4
+    assert np.array_equal(transparent[..., :3], plate)
+    assert np.all(transparent[40:80, 60:120, 3] == 0)
+    assert np.all(transparent[:20, :, 3] == 255)
+
+
+def test_reveal_mask_restores_source_without_flattening_layer():
+    source = np.full((60, 90, 3), 40, dtype=np.uint8)
+    composite = np.full_like(source, 180)
+    reveal = np.zeros(source.shape[:2], dtype=np.uint8)
+    reveal[15:45, 25:65] = 255
+
+    corrected = compose_plate_layer(source, composite, reveal, feather=1.0)
+
+    assert np.all(corrected[25:35, 35:55] == 40)
+    assert np.all(corrected[:8, :8] == 180)
+    assert np.all(composite == 180)

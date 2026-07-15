@@ -8,6 +8,8 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 
 ### Adicionado
 
+- placa limpa RGBA com movimento transparente, proteção dinâmica por frame e camada reversível;
+- pincel de revelação para recuperar partes do frame inferior cobertas pela placa limpa;
 - workspace versionado com branches, histórico, merge visual e originais imutáveis;
 - processamento retomável por chunks, fila em segundo plano, progresso e cancelamento;
 - seleções, clone, healing, máscaras, filtros por intervalo e análise de danos;

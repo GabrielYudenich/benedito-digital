@@ -36,7 +36,7 @@ A branch `develop` concentra a validação da próxima versão. A fundação atu
 - pincel e borracha contínuos, com raio ajustável e gravação ao concluir o traço;
 - detecção conservadora de sujeira transitória com correção explícita e máscara descartável;
 - intervalos reutilizáveis por posicionamento de câmera, com detecção ajustável;
-- placa limpa de fundo estático com proteção de pessoas e objetos em movimento;
+- placa limpa RGBA com fundo estático, movimento transparente e correção por camadas;
 - visão geral dos segmentos e reprodução silenciosa dos frames entre `0.25x` e `4x`;
 - catálogo lateral paginado em lista ou miniaturas, com busca por número e filtro de estado;
 - avisos coloridos por frame e painel destacável de revisão acessível por `Shift+S`;

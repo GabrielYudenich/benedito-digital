@@ -180,8 +180,25 @@ def apply_clean_plate(
         plate = _match_plate_tone(plate, current, static_mask)
     difference = cv2.absdiff(current, plate)
     difference_gray = cv2.cvtColor(difference, cv2.COLOR_BGR2GRAY)
+    dynamic_foreground = np.zeros(static_mask.shape, dtype=np.uint8)
     if application_mode == "background":
-        foreground = cv2.bitwise_not(static_mask)
+        foreground_candidate = np.where(
+            difference_gray >= 28, 255, 0
+        ).astype(np.uint8)
+        foreground_candidate = cv2.morphologyEx(
+            foreground_candidate,
+            cv2.MORPH_CLOSE,
+            np.ones((5, 5), np.uint8),
+        )
+        dynamic_foreground = _keep_components(
+            foreground_candidate,
+            max(192, int(height * width * 0.0007)),
+            height * width,
+            dilate=6,
+        )
+        foreground = cv2.bitwise_or(
+            cv2.bitwise_not(static_mask), dynamic_foreground
+        )
     else:
         foreground_candidate = np.where(
             difference_gray >= 24, 255, 0
@@ -205,10 +222,55 @@ def apply_clean_plate(
     diagnostics = {
         "replaced_pixels": int(np.count_nonzero(effective)),
         "protected_foreground_pixels": int(np.count_nonzero(foreground)),
+        "dynamic_foreground_pixels": int(np.count_nonzero(dynamic_foreground)),
         "plate_alignment_motion": plate_motion,
         "application_mode": application_mode,
     }
     return np.clip(output, 0, 255).astype(np.uint8), diagnostics
+
+
+def make_transparent_plate(
+    plate: np.ndarray,
+    static_mask: np.ndarray,
+) -> np.ndarray:
+    """Return a BGRA plate whose alpha keeps only proven static background."""
+    if plate.ndim != 3 or plate.shape[2] != 3:
+        raise ValueError("Clean plate must be a three-channel image")
+    alpha = cv2.resize(
+        static_mask,
+        (plate.shape[1], plate.shape[0]),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    return np.dstack((plate, alpha.astype(np.uint8)))
+
+
+def compose_plate_layer(
+    source: np.ndarray,
+    composite: np.ndarray,
+    reveal_mask: np.ndarray | None = None,
+    *,
+    feather: float = 3.0,
+) -> np.ndarray:
+    """Reveal the untouched source through a reversible clean-plate layer mask."""
+    height, width = composite.shape[:2]
+    source = cv2.resize(source, (width, height), interpolation=cv2.INTER_CUBIC)
+    if reveal_mask is None or not np.any(reveal_mask):
+        return composite.copy()
+    reveal_mask = cv2.resize(
+        reveal_mask,
+        (width, height),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    alpha = cv2.GaussianBlur(
+        reveal_mask,
+        (0, 0),
+        sigmaX=max(0.1, float(feather)),
+    ).astype(np.float32) / 255.0
+    output = (
+        composite.astype(np.float32) * (1.0 - alpha[..., None])
+        + source.astype(np.float32) * alpha[..., None]
+    )
+    return np.clip(output, 0, 255).astype(np.uint8)
 
 
 def restrict_defect_mask(

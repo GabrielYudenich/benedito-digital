@@ -14,7 +14,9 @@ class CleanPlateRecord:
     directory: Path
     plate_path: Path
     static_mask_path: Path
+    transparent_plate_path: Path | None
     application_region_path: Path | None
+    layer_metadata_path: Path | None
     source: str
     start: int
     end: int
@@ -94,9 +96,24 @@ def discover_clean_plates(
                 directory=directory,
                 plate_path=plate_path,
                 static_mask_path=static_mask_path,
+                transparent_plate_path=(
+                    directory / "plate_rgba.png"
+                    if (directory / "plate_rgba.png").is_file()
+                    else None
+                ),
                 application_region_path=(
                     directory / "application_region.png"
                     if (directory / "application_region.png").is_file()
+                    else None
+                ),
+                layer_metadata_path=(
+                    root.parent / "clean_plate_layers" / directory.name / "layer.json"
+                    if (
+                        root.parent
+                        / "clean_plate_layers"
+                        / directory.name
+                        / "layer.json"
+                    ).is_file()
                     else None
                 ),
                 source=source,

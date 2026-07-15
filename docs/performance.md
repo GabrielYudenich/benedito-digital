@@ -82,12 +82,17 @@ salvos podem ser reutilizados por estabilização, filtros e restauração.
 A placa limpa usa no máximo 15 amostras para identificar o fundo estático, mas preserva a
 nitidez de um frame-base escolhido pelo usuário ou automaticamente. Ao aplicar, somente o
 frame atual, os dois vizinhos, a placa e as máscaras ficam na memória. O modo completo troca
-todo o fundo estático com máscara suavizada e adaptação tonal por frame; o modo conservador
-troca somente defeitos detectados. Uma câmera móvel impede a aplicação automática.
+todo o fundo estático com máscara suavizada e adaptação tonal por frame. Uma segunda detecção
+por frame protege movimentos que não apareceram nas 15 amostras. A placa também é salva em
+RGBA, usando transparência onde não há fundo estático comprovado. O modo conservador troca
+somente defeitos detectados. Uma câmera móvel impede a aplicação automática.
 
 Quando existe estabilização manual ou automática ativa, a placa usa essa sequência como
-entrada e grava o resultado na mesma derivação estabilizada. Uma seleção espacial pode ser
-reutilizada como recorte em todo o segmento, evitando centenas de máscaras repetidas.
+entrada, mas grava o resultado em uma camada própria e não destrutiva. O frame estabilizado e
+o original permanecem preservados. Uma máscara de revelação por frame permite recuperar uma
+pessoa ou objeto que tenha sido coberto por engano; preview, segunda tela e render final usam a
+correção automaticamente. Uma seleção espacial pode ser reutilizada como recorte em todo o
+segmento, evitando centenas de máscaras repetidas.
 
 A reprodução da aba Frames é silenciosa e limitada ao trecho ativo. Ela usa o FPS conhecido
 da referência, permite `0.25x`, `0.5x`, `1x`, `2x` e `4x` e pula posições intermediárias se

@@ -96,7 +96,8 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 10. Escolha o primeiro frame do trecho, o frame atualmente aberto ou a amostra mais nítida
     como base visual. A mediana temporal identifica o que é fundo, mas não desfoca a placa.
 11. Use `Reconstruir todo o fundo estático` para um resultado visível, ou o modo conservador
-    para corrigir somente poeira e riscos. Rostos, braços e movimentos permanecem protegidos.
+    para corrigir somente poeira e riscos. O Benedito cria uma placa RGBA: rostos, braços e
+    movimentos detectados ficam transparentes e são protegidos novamente em cada frame.
 12. Se a câmera se mover além do limite seguro, a placa é preservada para inspeção, mas
    não é aplicada automaticamente. Estabilize ou reduza o segmento e tente novamente.
 13. Abra o botão `Placas limpas` ou `Restauração > Gerenciar e editar placas limpas` para
@@ -105,6 +106,11 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
     usam o botão direito para definir a origem e o botão esquerdo para aplicar o retoque.
 15. Salve a placa e escolha `Reaplicar ao trecho`, confirmando novamente fundo completo ou
     somente defeitos. A imagem gerada originalmente fica preservada em `plate_original.png`.
+16. A aplicação cria uma camada não destrutiva, sem sobrescrever o frame original ou a
+    estabilização. Se algum movimento ficar escondido, navegue até o frame, abra `Placas limpas`
+    e escolha `Corrigir movimento no frame atual...`.
+17. No editor de camada, pinte com `Revelar frame original` sobre a pessoa ou objeto apagado.
+    Use `Restaurar camada da placa` para desfazer partes da revelação e salve a correção.
 16. Placas criadas antes deste fluxo aparecem como antigas no gerenciador. Use `Recriar placa`
     para repetir exatamente o intervalo com a nova base nítida e a máscara suavizada.
 

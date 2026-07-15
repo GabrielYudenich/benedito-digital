@@ -44,7 +44,9 @@ from core.camera_segments import CameraSegment, CameraSegmentStore, detect_camer
 from core.clean_plate import (
     apply_clean_plate,
     build_clean_plate,
+    compose_plate_layer,
     detect_transient_defects,
+    make_transparent_plate,
     restrict_defect_mask,
 )
 from core.clean_plate_library import discover_clean_plates, make_clean_plate_id
@@ -61,6 +63,7 @@ from gui.dialogs.clean_plate_dialog import CleanPlateDialog
 from gui.dialogs.clean_plate_manager_dialog import (
     CleanPlateEditorDialog,
     CleanPlateManagerDialog,
+    CleanPlateRevealDialog,
 )
 from gui.dialogs.damage_analysis_dialog import DamageAnalysisDialog
 from gui.dialogs.extraction_dialog import ExtractionDialog
@@ -692,6 +695,8 @@ class EditorScreen:
         self.auto_masks_dir = os.path.join(worktree, "masks_auto")
         self.selections_dir = os.path.join(worktree, "selections")
         self.clean_plates_dir = os.path.join(worktree, "clean_plates")
+        self.clean_plate_layers_dir = os.path.join(worktree, "clean_plate_layers")
+        self._clean_plate_layers_cache = None
 
     def create_local_branch(self):
         self.version_controller.create_local_branch()
@@ -4292,6 +4297,9 @@ class EditorScreen:
             auto_path = os.path.join(self.auto_stab_dir, info['filename'])
             if os.path.exists(auto_path):
                 restored_path = auto_path
+        clean_plate_layer_path = self._clean_plate_layer_frame_path(info["index"])
+        if clean_plate_layer_path:
+            restored_path = clean_plate_layer_path
         if getattr(self, "view_upscale_var", None) is not None and self.view_upscale_var.get():
             up_path = os.path.join(self.upscaled_dir, info['filename'])
             if os.path.exists(up_path):
@@ -7124,6 +7132,94 @@ class EditorScreen:
         operations = self.workspace.get_history() if self.workspace else []
         return discover_clean_plates(self.clean_plates_dir, branch, operations)
 
+    def _clean_plate_layer_directories(self, plate_id):
+        root = os.path.join(self.clean_plate_layers_dir, plate_id)
+        return {
+            "root": root,
+            "composite": os.path.join(root, "composite"),
+            "corrected": os.path.join(root, "corrected"),
+            "reveal_masks": os.path.join(root, "reveal_masks"),
+            "metadata": os.path.join(root, "layer.json"),
+        }
+
+    def _write_clean_plate_layer_metadata(
+        self,
+        plate_id,
+        start,
+        end,
+        source_dir,
+        application_mode,
+    ):
+        paths = self._clean_plate_layer_directories(plate_id)
+        os.makedirs(paths["root"], exist_ok=True)
+        metadata = {
+            "plate_id": plate_id,
+            "start": int(start),
+            "end": int(end),
+            "source_dir": str(source_dir),
+            "application_mode": application_mode,
+            "enabled": True,
+            "updated_at": time.time(),
+        }
+        temporary = paths["metadata"] + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(metadata, handle, ensure_ascii=False, indent=2)
+        os.replace(temporary, paths["metadata"])
+        self._clean_plate_layers_cache = None
+        return paths, metadata
+
+    @staticmethod
+    def _clear_clean_plate_layer_outputs(layer_paths, frames, start, end):
+        for frame_index in range(start, end + 1):
+            frame_name = frames[frame_index]
+            for folder in (layer_paths["composite"], layer_paths["corrected"]):
+                path = os.path.join(folder, frame_name)
+                if os.path.isfile(path):
+                    os.remove(path)
+
+    def _refresh_clean_plate_layers(self):
+        layers = []
+        layers_dir = getattr(self, "clean_plate_layers_dir", None)
+        if not layers_dir:
+            self._clean_plate_layers_cache = layers
+            return layers
+        root = Path(layers_dir)
+        if root.is_dir():
+            for metadata_path in root.glob("*/layer.json"):
+                try:
+                    with open(metadata_path, "r", encoding="utf-8") as handle:
+                        metadata = json.load(handle)
+                    if not metadata.get("enabled", True):
+                        continue
+                    metadata["root"] = str(metadata_path.parent)
+                    layers.append(metadata)
+                except (OSError, ValueError, TypeError):
+                    continue
+        layers.sort(key=lambda item: float(item.get("updated_at", 0)), reverse=True)
+        self._clean_plate_layers_cache = layers
+        return layers
+
+    def _clean_plate_layer_frame_path(self, frame_index):
+        if not self.frame_manager or not self.frame_manager.frames:
+            return None
+        layers = (
+            getattr(self, "_clean_plate_layers_cache", None)
+            if getattr(self, "_clean_plate_layers_cache", None) is not None
+            else self._refresh_clean_plate_layers()
+        )
+        frame_name = self.frame_manager.frames[frame_index]
+        for layer in layers:
+            if not int(layer.get("start", 0)) <= frame_index <= int(layer.get("end", -1)):
+                continue
+            root = layer["root"]
+            corrected = os.path.join(root, "corrected", frame_name)
+            if os.path.isfile(corrected):
+                return corrected
+            composite = os.path.join(root, "composite", frame_name)
+            if os.path.isfile(composite):
+                return composite
+        return None
+
     def open_clean_plate_manager(self):
         records = self._clean_plate_records()
         CleanPlateManagerDialog(
@@ -7132,6 +7228,7 @@ class EditorScreen:
             self._open_clean_plate_editor,
             self._reapply_clean_plate,
             self._rebuild_clean_plate,
+            self._open_clean_plate_reveal_editor,
         )
 
     def _rebuild_clean_plate(self, record):
@@ -7155,6 +7252,13 @@ class EditorScreen:
             messagebox.showerror("Editar placa limpa", str(exc))
 
     def _save_clean_plate_edit(self, record, original_path):
+        plate = cv2.imread(str(record.plate_path), cv2.IMREAD_COLOR)
+        static_mask = cv2.imread(str(record.static_mask_path), cv2.IMREAD_GRAYSCALE)
+        transparent_path = record.directory / "plate_rgba.png"
+        if plate is None or static_mask is None or not cv2.imwrite(
+            str(transparent_path), make_transparent_plate(plate, static_mask)
+        ):
+            raise RuntimeError("Não foi possível atualizar a placa transparente")
         if self.workspace:
             self.workspace.commit_operation(
                 "clean_plate.edit",
@@ -7168,10 +7272,119 @@ class EditorScreen:
                     "plate": record.plate_path,
                     "generated_original": original_path,
                     "background_mask": record.static_mask_path,
+                    "transparent_plate": transparent_path,
                 },
             )
         self.status_var.set(
             f"Placa {record.plate_id} editada — reaplique para atualizar os frames"
+        )
+
+    def _open_clean_plate_reveal_editor(self, record, parent=None):
+        info = self.frame_manager.get_current_frame_info() if self.frame_manager else None
+        if not info:
+            return
+        frame_index = info["index"]
+        if not record.start <= frame_index <= record.end:
+            messagebox.showinfo(
+                "Camada da placa",
+                f"O frame atual precisa estar entre {record.start + 1} e {record.end + 1}.",
+                parent=parent or self.root,
+            )
+            return
+        paths = self._clean_plate_layer_directories(record.plate_id)
+        composite_path = os.path.join(paths["composite"], info["filename"])
+        if not os.path.isfile(composite_path):
+            messagebox.showinfo(
+                "Camada ainda não criada",
+                "Reaplique esta placa como fundo estático completo para criar a camada não destrutiva.",
+                parent=parent or self.root,
+            )
+            return
+        source_path = self._get_source_frame_path(frame_index)
+        reveal_mask_path = os.path.join(paths["reveal_masks"], info["filename"])
+        try:
+            CleanPlateRevealDialog(
+                parent or self.root,
+                frame_index + 1,
+                source_path,
+                composite_path,
+                reveal_mask_path,
+                lambda mask: self._save_clean_plate_reveal(
+                    record,
+                    frame_index,
+                    source_path,
+                    composite_path,
+                    mask,
+                ),
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Corrigir camada da placa", str(exc), parent=parent or self.root
+            )
+
+    def _save_clean_plate_reveal(
+        self,
+        record,
+        frame_index,
+        source_path,
+        composite_path,
+        reveal_mask,
+    ):
+        paths = self._clean_plate_layer_directories(record.plate_id)
+        frame_name = self.frame_manager.frames[frame_index]
+        reveal_path = os.path.join(paths["reveal_masks"], frame_name)
+        corrected_path = os.path.join(paths["corrected"], frame_name)
+        artifacts = {"plate_composite": composite_path}
+        cleared = not np.any(reveal_mask)
+        if cleared:
+            for path in (reveal_path, corrected_path):
+                if os.path.isfile(path):
+                    os.remove(path)
+            visible_path = composite_path
+        else:
+            source = cv2.imread(source_path, cv2.IMREAD_COLOR)
+            composite = cv2.imread(composite_path, cv2.IMREAD_COLOR)
+            if source is None or composite is None:
+                raise RuntimeError("Não foi possível recompor a camada da placa")
+            os.makedirs(paths["reveal_masks"], exist_ok=True)
+            os.makedirs(paths["corrected"], exist_ok=True)
+            if not cv2.imwrite(reveal_path, reveal_mask):
+                raise RuntimeError("Não foi possível salvar a máscara de revelação")
+            corrected = compose_plate_layer(source, composite, reveal_mask)
+            if not cv2.imwrite(corrected_path, corrected):
+                raise RuntimeError("Não foi possível salvar a correção da camada")
+            visible_path = corrected_path
+            artifacts["reveal_mask"] = reveal_path
+        artifacts["frame"] = visible_path
+        try:
+            with open(paths["metadata"], "r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+            self._write_clean_plate_layer_metadata(
+                record.plate_id,
+                metadata["start"],
+                metadata["end"],
+                metadata.get("source_dir", ""),
+                metadata.get("application_mode", "background"),
+            )
+        except (OSError, ValueError, KeyError):
+            self._clean_plate_layers_cache = None
+        if self.workspace:
+            self.workspace.commit_operation(
+                "clean_plate.layer.reveal",
+                payload={
+                    "plate_id": record.plate_id,
+                    "frame": frame_index,
+                    "cleared": cleared,
+                },
+                frame_number=frame_index,
+                artifacts=artifacts,
+            )
+        self._refresh_clean_plate_layers()
+        self.view_mode = "restored"
+        self.view_mode_label.config(text="Visualização: restaurado")
+        self.show_current_frame()
+        self.status_var.set(
+            f"Camada corrigida no frame {frame_index + 1} — original preservado"
         )
 
     def _clean_plate_output_dir(self):
@@ -7194,9 +7407,21 @@ class EditorScreen:
             or os.path.join(frames_dir, filename)
             for frame_index, filename in enumerate(frames)
         ]
-        output_dir = self._clean_plate_output_dir()
+        source_dir = self._clean_plate_output_dir()
+        layer_paths = self._clean_plate_layer_directories(record.plate_id)
+        output_dir = layer_paths["composite"]
 
         def reapply_task(context):
+            self._write_clean_plate_layer_metadata(
+                record.plate_id,
+                start,
+                end,
+                source_dir,
+                application_mode,
+            )
+            self._clear_clean_plate_layer_outputs(
+                layer_paths, frames, start, end
+            )
             plate = cv2.imread(str(record.plate_path), cv2.IMREAD_COLOR)
             static_mask = cv2.imread(
                 str(record.static_mask_path), cv2.IMREAD_GRAYSCALE
@@ -7208,6 +7433,11 @@ class EditorScreen:
             )
             if plate is None or static_mask is None:
                 raise RuntimeError("Os arquivos da placa limpa estão incompletos.")
+            transparent_path = record.directory / "plate_rgba.png"
+            if not cv2.imwrite(
+                str(transparent_path), make_transparent_plate(plate, static_mask)
+            ):
+                raise RuntimeError("Não foi possível criar a placa transparente")
             modified = 0
             replaced_pixels = 0
             chunk_artifacts = {}
@@ -7267,9 +7497,37 @@ class EditorScreen:
                     output = os.path.join(output_dir, frames[frame_index])
                     if not cv2.imwrite(output, restored):
                         raise RuntimeError(f"Não foi possível salvar {output}")
-                    chunk_artifacts[f"frame_{frame_index:09d}"] = output
+                    visible_output = output
+                    reveal_path = os.path.join(
+                        layer_paths["reveal_masks"], frames[frame_index]
+                    )
+                    reveal_mask = (
+                        cv2.imread(reveal_path, cv2.IMREAD_GRAYSCALE)
+                        if os.path.isfile(reveal_path)
+                        else None
+                    )
+                    if reveal_mask is not None and np.any(reveal_mask):
+                        corrected = compose_plate_layer(
+                            current, restored, reveal_mask
+                        )
+                        os.makedirs(layer_paths["corrected"], exist_ok=True)
+                        visible_output = os.path.join(
+                            layer_paths["corrected"], frames[frame_index]
+                        )
+                        if not cv2.imwrite(visible_output, corrected):
+                            raise RuntimeError(
+                                f"Não foi possível salvar {visible_output}"
+                            )
+                    chunk_artifacts[f"frame_{frame_index:09d}"] = visible_output
                     modified += 1
                     replaced_pixels += replaced
+                else:
+                    for stale_path in (
+                        os.path.join(output_dir, frames[frame_index]),
+                        os.path.join(layer_paths["corrected"], frames[frame_index]),
+                    ):
+                        if os.path.isfile(stale_path):
+                            os.remove(stale_path)
                 if len(chunk_artifacts) >= 24 or frame_index == end:
                     if self.workspace and chunk_artifacts:
                         self.workspace.commit_operation(
@@ -7290,6 +7548,18 @@ class EditorScreen:
                     (position + 1) * 100.0 / (end - start + 1),
                     f"Reaplicando placa editada — {position + 1}/{end - start + 1}",
                 )
+            if self.workspace:
+                self.workspace.commit_operation(
+                    "clean_plate.layer.configure",
+                    payload={
+                        "plate_id": record.plate_id,
+                        "start": start,
+                        "end": end,
+                        "application_mode": application_mode,
+                        "source_dir": source_dir,
+                    },
+                    artifacts={"layer_metadata": layer_paths["metadata"]},
+                )
             return {
                 "modified": modified,
                 "replaced_pixels": replaced_pixels,
@@ -7299,6 +7569,7 @@ class EditorScreen:
             }
 
         def reapply_complete(result):
+            self._refresh_clean_plate_layers()
             self.view_mode = "restored"
             self.view_mode_label.config(text="Visualização: restaurado")
             self.show_current_frame()
@@ -7386,7 +7657,7 @@ class EditorScreen:
             or os.path.join(frames_dir, filename)
             for frame_index, filename in enumerate(frames)
         ]
-        clean_plate_output_dir = self._clean_plate_output_dir()
+        clean_plate_source_dir = self._clean_plate_output_dir()
         sample_indices = sorted(
             set(np.linspace(start, end, min(15, end - start + 1), dtype=int).tolist())
         )
@@ -7400,8 +7671,11 @@ class EditorScreen:
             end,
             self.workspace.active_branch if self.workspace else "principal",
         )
+        layer_paths = self._clean_plate_layer_directories(plate_id)
+        clean_plate_output_dir = layer_paths["composite"]
         plate_dir = os.path.join(self.clean_plates_dir, plate_id)
         plate_path = os.path.join(plate_dir, "plate.png")
+        transparent_plate_path = os.path.join(plate_dir, "plate_rgba.png")
         static_mask_path = os.path.join(plate_dir, "static_background.png")
         application_region_path = os.path.join(plate_dir, "application_region.png")
 
@@ -7438,8 +7712,14 @@ class EditorScreen:
                 static_mask_path, static_mask
             ):
                 raise RuntimeError("Não foi possível salvar a placa limpa")
+            if not cv2.imwrite(
+                transparent_plate_path,
+                make_transparent_plate(plate, static_mask),
+            ):
+                raise RuntimeError("Não foi possível salvar a placa transparente")
             artifacts = {
                 "plate": plate_path,
+                "transparent_plate": transparent_plate_path,
                 "background_mask": static_mask_path,
             }
             if application_region is not None:
@@ -7470,6 +7750,16 @@ class EditorScreen:
             modified = 0
             context.report(60, "Placa limpa criada")
             if apply_after_build and diagnostics["camera_static"]:
+                self._write_clean_plate_layer_metadata(
+                    plate_id,
+                    start,
+                    end,
+                    clean_plate_source_dir,
+                    application_mode,
+                )
+                self._clear_clean_plate_layer_outputs(
+                    layer_paths, frames, start, end
+                )
                 chunk_artifacts = {}
                 for position, frame_index in enumerate(range(start, end + 1)):
                     context.check_cancelled()
@@ -7520,8 +7810,36 @@ class EditorScreen:
                         os.makedirs(clean_plate_output_dir, exist_ok=True)
                         if not cv2.imwrite(output, restored):
                             raise RuntimeError(f"Não foi possível salvar {output}")
-                        chunk_artifacts[f"frame_{frame_index:09d}"] = output
+                        visible_output = output
+                        reveal_path = os.path.join(
+                            layer_paths["reveal_masks"], frames[frame_index]
+                        )
+                        reveal_mask = (
+                            cv2.imread(reveal_path, cv2.IMREAD_GRAYSCALE)
+                            if os.path.isfile(reveal_path)
+                            else None
+                        )
+                        if reveal_mask is not None and np.any(reveal_mask):
+                            corrected = compose_plate_layer(
+                                current, restored, reveal_mask
+                            )
+                            os.makedirs(layer_paths["corrected"], exist_ok=True)
+                            visible_output = os.path.join(
+                                layer_paths["corrected"], frames[frame_index]
+                            )
+                            if not cv2.imwrite(visible_output, corrected):
+                                raise RuntimeError(
+                                    f"Não foi possível salvar {visible_output}"
+                                )
+                        chunk_artifacts[f"frame_{frame_index:09d}"] = visible_output
                         modified += 1
+                    else:
+                        for stale_path in (
+                            os.path.join(clean_plate_output_dir, frames[frame_index]),
+                            os.path.join(layer_paths["corrected"], frames[frame_index]),
+                        ):
+                            if os.path.isfile(stale_path):
+                                os.remove(stale_path)
                     if len(chunk_artifacts) >= 24 or frame_index == end:
                         if self.workspace and chunk_artifacts:
                             self.workspace.commit_operation(
@@ -7539,6 +7857,18 @@ class EditorScreen:
                     context.report(
                         60.0 + (position + 1) * 40.0 / (end - start + 1),
                         f"Aplicando somente no fundo — {position + 1}/{end - start + 1}",
+                    )
+                if self.workspace:
+                    self.workspace.commit_operation(
+                        "clean_plate.layer.configure",
+                        payload={
+                            "plate_id": plate_id,
+                            "start": start,
+                            "end": end,
+                            "application_mode": application_mode,
+                            "source_dir": clean_plate_source_dir,
+                        },
+                        artifacts={"layer_metadata": layer_paths["metadata"]},
                     )
             return {
                 "diagnostics": diagnostics,
@@ -7558,6 +7888,7 @@ class EditorScreen:
                     "A placa foi criada para inspeção, mas não foi aplicada. Separe uma cena menor ou estabilize o intervalo primeiro.",
                 )
             elif result["applied"]:
+                self._refresh_clean_plate_layers()
                 self.view_mode = "restored"
                 self.view_mode_label.config(text="Visualização: restaurado")
                 self.show_current_frame()
@@ -8965,7 +9296,8 @@ class EditorScreen:
                 self.status_label.config(text="Nao foi possivel abrir o link do KAIR")
 
     def render_restored_video_action(self):
-        if not os.path.exists(self.restored_dir):
+        has_clean_plate_layers = bool(self._refresh_clean_plate_layers())
+        if not os.path.exists(self.restored_dir) and not has_clean_plate_layers:
             messagebox.showwarning("Aviso", "Nenhum frame restaurado encontrado.")
             return
 
@@ -9012,7 +9344,7 @@ class EditorScreen:
         def render_task(context):
             source = frames_source
             useful_is_trimmed = useful.start > 0 or useful.end < len(frames) - 1
-            if render_range or useful_is_trimmed or burn_in_counters:
+            if render_range or useful_is_trimmed or burn_in_counters or has_clean_plate_layers:
                 temp_dir = os.path.join(self.video_renderer.temp_dir, "render_range")
                 os.makedirs(temp_dir, exist_ok=True)
                 for filename in os.listdir(temp_dir):
@@ -9091,6 +9423,9 @@ class EditorScreen:
     def _render_source_path(self, frame_index, preferred_dir=None):
         filename = self.frame_manager.frames[frame_index]
         candidates = []
+        clean_plate_layer_path = self._clean_plate_layer_frame_path(frame_index)
+        if clean_plate_layer_path:
+            candidates.append(clean_plate_layer_path)
         if preferred_dir:
             candidates.append(os.path.join(preferred_dir, filename))
         if not preferred_dir:
@@ -9625,6 +9960,33 @@ class EditorScreen:
             context.report(10, "Preparando fontes para renderização...")
             if render_type == "full":
                 render_frames = self.restored_dir if os.path.isdir(self.restored_dir) else self.frame_manager.frames_dir
+                if self._refresh_clean_plate_layers():
+                    temp_dir = os.path.join(
+                        self.video_renderer.temp_dir, "layered_full_render"
+                    )
+                    os.makedirs(temp_dir, exist_ok=True)
+                    for filename in os.listdir(temp_dir):
+                        path = os.path.join(temp_dir, filename)
+                        if os.path.isfile(path):
+                            os.remove(path)
+                    for position, _filename in enumerate(self.frame_manager.frames):
+                        context.check_cancelled()
+                        source = self._render_source_path(position, render_frames)
+                        image = cv2.imread(source, cv2.IMREAD_COLOR)
+                        if image is None:
+                            continue
+                        destination = os.path.join(
+                            temp_dir, f"frame_{position + 1:06d}.png"
+                        )
+                        if not cv2.imwrite(destination, image):
+                            raise RuntimeError(
+                                f"Não foi possível preparar {destination}"
+                            )
+                        context.report(
+                            10.0 + (position + 1) * 20.0 / len(self.frame_manager.frames),
+                            f"Compondo camadas — {position + 1}/{len(self.frame_manager.frames)}",
+                        )
+                    render_frames = temp_dir
                 success = self.video_renderer.render_full_project(
                     self.project_manager.current_project_path,
                     output_path,
