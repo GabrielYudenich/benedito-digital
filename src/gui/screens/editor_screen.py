@@ -7183,6 +7183,31 @@ class EditorScreen:
         self._clean_plate_layers_cache = None
         return paths, metadata
 
+    def _clean_plate_base_source_path(self, frame_index):
+        if not self.frame_manager or not self.frame_manager.frames:
+            return None
+        frame_index = max(0, min(frame_index, len(self.frame_manager.frames) - 1))
+        frame_name = self.frame_manager.frames[frame_index]
+        for directory in (self.manual_stab_dir, self.auto_stab_dir):
+            candidate = os.path.join(directory, frame_name)
+            if os.path.isfile(candidate):
+                return candidate
+        return os.path.join(self.frame_manager.frames_dir, frame_name)
+
+    def _clean_plate_base_source_dir(self):
+        if self.frame_manager and self.frame_manager.frames:
+            frame_index = max(
+                0,
+                min(
+                    self.frame_manager.current_frame_index,
+                    len(self.frame_manager.frames) - 1,
+                ),
+            )
+            source = self._clean_plate_base_source_path(frame_index)
+            if source:
+                return os.path.dirname(source)
+        return self.frame_manager.frames_dir if self.frame_manager else ""
+
     @staticmethod
     def _clear_clean_plate_layer_outputs(layer_paths, frames, start, end):
         for frame_index in range(start, end + 1):
@@ -7356,7 +7381,7 @@ class EditorScreen:
                 parent=parent or self.root,
             )
             return
-        source_path = self._get_source_frame_path(frame_index)
+        source_path = self._clean_plate_base_source_path(frame_index)
         reveal_mask_path = os.path.join(paths["reveal_masks"], info["filename"])
         try:
             CleanPlateRevealDialog(
@@ -7423,7 +7448,13 @@ class EditorScreen:
                 metadata.get("application_mode", "background"),
             )
         except (OSError, ValueError, KeyError):
-            self._clean_plate_layers_cache = None
+            self._write_clean_plate_layer_metadata(
+                record.plate_id,
+                frame_index,
+                frame_index,
+                self._clean_plate_base_source_dir(),
+                "background",
+            )
         if self.workspace:
             self.workspace.commit_operation(
                 "clean_plate.layer.reveal",
@@ -7443,13 +7474,6 @@ class EditorScreen:
             f"Camada corrigida no frame {frame_index + 1} — original preservado"
         )
 
-    def _clean_plate_output_dir(self):
-        if self.use_manual_stab_var.get():
-            return self.manual_stab_dir
-        if self.use_auto_stab_var.get():
-            return self.auto_stab_dir
-        return self.restored_dir
-
     def _reapply_clean_plate(self, record, application_mode="background"):
         if not self.frame_manager or not self.frame_manager.frames:
             messagebox.showwarning("Placa limpa", "Nenhum frame está carregado.")
@@ -7459,11 +7483,11 @@ class EditorScreen:
         start = max(0, min(record.start, len(frames) - 1))
         end = max(start, min(record.end, len(frames) - 1))
         source_paths = [
-            self._get_source_frame_path(frame_index)
+            self._clean_plate_base_source_path(frame_index)
             or os.path.join(frames_dir, filename)
             for frame_index, filename in enumerate(frames)
         ]
-        source_dir = self._clean_plate_output_dir()
+        source_dir = self._clean_plate_base_source_dir()
         layer_paths = self._clean_plate_layer_directories(record.plate_id)
         output_dir = layer_paths["composite"]
 
@@ -7709,11 +7733,11 @@ class EditorScreen:
                 current_info["path"], current_info["index"]
             )
         source_paths = [
-            self._get_source_frame_path(frame_index)
+            self._clean_plate_base_source_path(frame_index)
             or os.path.join(frames_dir, filename)
             for frame_index, filename in enumerate(frames)
         ]
-        clean_plate_source_dir = self._clean_plate_output_dir()
+        clean_plate_source_dir = self._clean_plate_base_source_dir()
         sample_indices = sorted(
             set(np.linspace(start, end, min(15, end - start + 1), dtype=int).tolist())
         )

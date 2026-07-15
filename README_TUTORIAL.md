@@ -122,8 +122,9 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
     estabilização. Se algum movimento ficar escondido, navegue até o frame, abra `Placas limpas`
     e escolha `Corrigir movimento no frame atual...`.
 19. Também é possível abrir diretamente `Restauração > Corrigir camada da placa no frame atual`.
-    Pinte com `Revelar frame original` sobre a pessoa ou objeto apagado.
-    Use `Restaurar camada da placa` para desfazer partes da revelação e salve a correção.
+    Pinte com `Revelar frame original` sobre a pessoa ou objeto apagado; o resultado aparece
+    imediatamente. A máscara amarela é opcional. Use `Restaurar camada da placa` para desfazer
+    partes da revelação e salve a correção.
 20. Placas criadas antes deste fluxo aparecem como antigas no gerenciador. Use `Recriar placa`
     para repetir exatamente o intervalo com a nova base nítida e a máscara suavizada.
 

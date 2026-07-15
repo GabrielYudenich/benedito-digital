@@ -15,6 +15,9 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - reset isolado por posicionamento, preservando resultados dos demais intervalos;
 - reaplicação oferecida imediatamente após editar a imagem ou o alpha da placa;
 - acesso direto ao pincel de revelação da layer no frame atual;
+- placa e pincel de revelação usam estabilização/original limpos, nunca um `restored` legado contaminado;
+- correções reativam com segurança somente o frame atual quando a metadata da layer está ausente;
+- prévia do pincel mostra o resultado real por padrão, com máscara amarela opcional;
 - workspace versionado com branches, histórico, merge visual e originais imutáveis;
 - processamento retomável por chunks, fila em segundo plano, progresso e cancelamento;
 - seleções, clone, healing, máscaras, filtros por intervalo e análise de danos;

@@ -99,6 +99,10 @@ salvar, o editor desativa a layer obsoleta e pergunta se a placa deve ser reapli
 O reset de posicionamento remove apenas as derivações dos frames daquele intervalo e limpa
 checkpoints incompatíveis.
 
+A fonte segura da placa é a estabilização manual/automática disponível ou, na ausência dela,
+o frame extraído original. Resultados `restored` legados não entram como camada inferior, pois
+podem conter aplicações antigas da própria placa. O pincel de revelação segue a mesma regra.
+
 A reprodução da aba Frames é silenciosa e limitada ao trecho ativo. Ela usa o FPS conhecido
 da referência, permite `0.25x`, `0.5x`, `1x`, `2x` e `4x` e pula posições intermediárias se
 a decodificação de PNGs grandes não acompanhar o relógio, mantendo a interface responsiva.

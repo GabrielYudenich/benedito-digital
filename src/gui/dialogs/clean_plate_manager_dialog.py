@@ -382,8 +382,8 @@ class CleanPlateRevealDialog:
 
         self.window = tk.Toplevel(parent)
         self.window.title(f"Corrigir camada da placa — frame {frame_number}")
-        self.window.geometry("1240x820")
-        self.window.minsize(900, 650)
+        self.window.geometry("1280x820")
+        self.window.minsize(1000, 650)
         self.window.transient(parent)
 
         toolbar = ttk.Frame(self.window, padding=10)
@@ -415,6 +415,13 @@ class CleanPlateRevealDialog:
         ttk.Button(toolbar, text="Refazer", command=self._redo).pack(side=tk.LEFT)
 
         self.preview_mode = tk.StringVar(value="corrected")
+        self.show_reveal_overlay = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            toolbar,
+            text="Mostrar máscara amarela",
+            variable=self.show_reveal_overlay,
+            command=self._schedule_redraw,
+        ).pack(side=tk.RIGHT, padx=(12, 0))
         for value, label in (
             ("corrected", "Com correção"),
             ("composite", "Somente placa"),
@@ -448,8 +455,8 @@ class CleanPlateRevealDialog:
         ttk.Label(
             footer,
             text=(
-                "Pinte sobre braços, rostos ou objetos apagados. Amarelo indica onde "
-                "a camada inferior será revelada. Use o botão do meio para mover."
+                "Pinte sobre braços, rostos ou objetos apagados: o resultado aparece "
+                "imediatamente. Ative a máscara amarela apenas para conferir a área."
             ),
         ).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(footer, text="Cancelar", command=self.window.destroy).pack(side=tk.RIGHT)
@@ -564,7 +571,7 @@ class CleanPlateRevealDialog:
             display = composite
         else:
             display = compose_plate_layer(source, composite, mask, feather=max(0.6, 3.0 * scale))
-            if np.any(mask):
+            if np.any(mask) and self.show_reveal_overlay.get():
                 overlay = display.copy()
                 overlay[mask > 0] = (30, 205, 255)
                 display = cv2.addWeighted(display, 0.72, overlay, 0.28, 0)
