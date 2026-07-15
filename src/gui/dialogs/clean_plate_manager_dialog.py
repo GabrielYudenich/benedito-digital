@@ -625,10 +625,25 @@ class CleanPlateEditorDialog:
         ttk.Label(toolbar, text="Pincel:").pack(side=tk.LEFT, padx=(18, 5))
         self.brush_size = tk.IntVar(value=18)
         ttk.Scale(toolbar, from_=2, to=120, variable=self.brush_size, orient=tk.HORIZONTAL, length=150).pack(side=tk.LEFT)
-        self.mask_overlay = tk.BooleanVar(value=False)
+
+        alpha_toolbar = ttk.Frame(self.window, padding=(10, 0, 10, 8))
+        alpha_toolbar.pack(fill=tk.X)
+        ttk.Label(alpha_toolbar, text="Transparência da placa:").pack(side=tk.LEFT)
+        for tool, label in (
+            ("transparent", "◫ Tornar transparente"),
+            ("static", "▣ Manter como fundo"),
+        ):
+            button = ttk.Button(
+                alpha_toolbar,
+                text=label,
+                command=lambda value=tool: self._set_tool(value),
+            )
+            button.pack(side=tk.LEFT, padx=(8, 0))
+            self.tool_buttons[tool] = button
+        self.mask_overlay = tk.BooleanVar(value=True)
         ttk.Checkbutton(
-            toolbar,
-            text="Mostrar área estática",
+            alpha_toolbar,
+            text="Prévia quadriculada da transparência",
             variable=self.mask_overlay,
             command=self._schedule_redraw,
         ).pack(side=tk.RIGHT)
@@ -658,6 +673,10 @@ class CleanPlateEditorDialog:
         self.tool = tool
         if tool == "noise":
             message = "Pinte poeira e riscos; depois clique em Remover ruído marcado."
+        elif tool == "transparent":
+            message = "Pinte as áreas que não devem fazer parte da placa; elas ficarão transparentes."
+        elif tool == "static":
+            message = "Pinte para restaurar uma área transparente como fundo estático da placa."
         else:
             message = "Botão direito define a origem; arraste com o esquerdo para retocar."
         self.status_var.set(message)
@@ -681,7 +700,9 @@ class CleanPlateEditorDialog:
         return None
 
     def _push_undo(self):
-        self.undo_stack.append((self.image.copy(), self.noise_mask.copy()))
+        self.undo_stack.append(
+            (self.image.copy(), self.noise_mask.copy(), self.static_mask.copy())
+        )
         del self.undo_stack[:-16]
         self.redo_stack.clear()
 
@@ -718,6 +739,19 @@ class CleanPlateEditorDialog:
                 cv2.circle(self.noise_mask, point, radius, 255, -1, cv2.LINE_AA)
             else:
                 cv2.line(self.noise_mask, self.last_point, point, 255, radius * 2, cv2.LINE_AA)
+        elif self.tool in {"transparent", "static"}:
+            value = 0 if self.tool == "transparent" else 255
+            if self.last_point is None:
+                cv2.circle(self.static_mask, point, radius, value, -1, cv2.LINE_AA)
+            else:
+                cv2.line(
+                    self.static_mask,
+                    self.last_point,
+                    point,
+                    value,
+                    radius * 2,
+                    cv2.LINE_AA,
+                )
         else:
             source = (
                 self.source_anchor[0] + point[0] - self.target_anchor[0],
@@ -767,15 +801,19 @@ class CleanPlateEditorDialog:
     def _undo(self):
         if not self.undo_stack:
             return
-        self.redo_stack.append((self.image.copy(), self.noise_mask.copy()))
-        self.image, self.noise_mask = self.undo_stack.pop()
+        self.redo_stack.append(
+            (self.image.copy(), self.noise_mask.copy(), self.static_mask.copy())
+        )
+        self.image, self.noise_mask, self.static_mask = self.undo_stack.pop()
         self._schedule_redraw()
 
     def _redo(self):
         if not self.redo_stack:
             return
-        self.undo_stack.append((self.image.copy(), self.noise_mask.copy()))
-        self.image, self.noise_mask = self.redo_stack.pop()
+        self.undo_stack.append(
+            (self.image.copy(), self.noise_mask.copy(), self.static_mask.copy())
+        )
+        self.image, self.noise_mask, self.static_mask = self.redo_stack.pop()
         self._schedule_redraw()
 
     def _pan_press(self, event):
@@ -809,12 +847,17 @@ class CleanPlateEditorDialog:
         height = max(1, int(round(self.image.shape[0] * scale)))
         display = cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB)
         if self.mask_overlay.get():
-            overlay = display.copy()
-            overlay[self.static_mask > 0] = (
-                overlay[self.static_mask > 0].astype(np.float32) * 0.65
-                + np.array([35, 255, 120], dtype=np.float32) * 0.35
+            checker = np.zeros_like(display)
+            tile = 24
+            rows, columns = np.indices(self.static_mask.shape)
+            light = ((rows // tile) + (columns // tile)) % 2 == 0
+            checker[light] = (92, 92, 102)
+            checker[~light] = (42, 42, 52)
+            alpha = self.static_mask.astype(np.float32) / 255.0
+            display = (
+                display.astype(np.float32) * alpha[..., None]
+                + checker.astype(np.float32) * (1.0 - alpha[..., None])
             ).astype(np.uint8)
-            display = overlay
         if np.any(self.noise_mask):
             display = display.copy()
             display[self.noise_mask > 0] = (255, 190, 35)
@@ -833,12 +876,22 @@ class CleanPlateEditorDialog:
     def _save(self):
         try:
             original_path = self.record.directory / "plate_original.png"
+            original_mask_path = (
+                self.record.directory / "static_background_original.png"
+            )
             if not original_path.exists():
                 shutil.copy2(self.record.plate_path, original_path)
+            if not original_mask_path.exists() and self.record.static_mask_path.exists():
+                shutil.copy2(self.record.static_mask_path, original_mask_path)
             temporary = self.record.directory / "plate.editing.png"
+            temporary_mask = self.record.directory / "static_background.editing.png"
             if not cv2.imwrite(str(temporary), self.image):
                 raise RuntimeError("Não foi possível gravar a imagem editada")
+            if not cv2.imwrite(str(temporary_mask), self.static_mask):
+                temporary.unlink(missing_ok=True)
+                raise RuntimeError("Não foi possível gravar a transparência editada")
             os.replace(temporary, self.record.plate_path)
+            os.replace(temporary_mask, self.record.static_mask_path)
             self.save_callback(self.record, original_path)
         except Exception as exc:
             messagebox.showerror("Salvar placa", str(exc), parent=self.window)

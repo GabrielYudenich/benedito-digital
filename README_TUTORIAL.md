@@ -72,6 +72,12 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
 12. Para retirar frames que não entrarão no trabalho, navegue até o novo início e use
     `Editar > Corte não destrutivo > Definir frame atual como início útil`. Faça o mesmo
     com o final. Os PNGs e o vídeo original permanecem no projeto e o corte pode ser desfeito.
+13. Para descartar apenas o resultado do frame aberto, use
+    `Versionamento > Resetar frame para o original`.
+14. Se estabilização, placa e restauração se misturarem, use
+    `Versionamento > Resetar todos os resultados para os frames originais...`. O reset remove
+    somente derivações e checkpoints da branch; vídeo, PNGs extraídos, proxy e placas salvas
+    permanecem intactos.
 
 **6. Separar posicionamentos e construir uma placa limpa**
 1. Digite o primeiro e o último frame em `Trecho de trabalho` — por exemplo, `61` e
@@ -104,14 +110,16 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
     visualizar a imagem gerada, seu caminho, intervalo e quantos frames foram alterados.
 14. Em `Editar placa`, pinte poeira ou riscos e use `Remover ruído marcado`. Clone e Healing
     usam o botão direito para definir a origem e o botão esquerdo para aplicar o retoque.
-15. Salve a placa e escolha `Reaplicar ao trecho`, confirmando novamente fundo completo ou
+15. Use `Tornar transparente` para retirar pessoas, objetos ou áreas inseguras da placa. O
+    quadriculado mostra o alpha removido. `Manter como fundo` devolve uma área à placa.
+16. Salve a placa e escolha `Reaplicar ao trecho`, confirmando novamente fundo completo ou
     somente defeitos. A imagem gerada originalmente fica preservada em `plate_original.png`.
-16. A aplicação cria uma camada não destrutiva, sem sobrescrever o frame original ou a
+17. A aplicação cria uma camada não destrutiva, sem sobrescrever o frame original ou a
     estabilização. Se algum movimento ficar escondido, navegue até o frame, abra `Placas limpas`
     e escolha `Corrigir movimento no frame atual...`.
-17. No editor de camada, pinte com `Revelar frame original` sobre a pessoa ou objeto apagado.
+18. No editor de camada, pinte com `Revelar frame original` sobre a pessoa ou objeto apagado.
     Use `Restaurar camada da placa` para desfazer partes da revelação e salve a correção.
-16. Placas criadas antes deste fluxo aparecem como antigas no gerenciador. Use `Recriar placa`
+19. Placas criadas antes deste fluxo aparecem como antigas no gerenciador. Use `Recriar placa`
     para repetir exatamente o intervalo com a nova base nítida e a máscara suavizada.
 
 **7. Restaurar**

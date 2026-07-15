@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+from pathlib import Path
 from tkinter import messagebox, simpledialog
 
 from gui.dialogs.branch_manager import BranchManagerDialog
@@ -197,30 +199,173 @@ class ProjectVersionController:
             "Resetar frame", "Descartar as alterações desta branch para este frame?"
         ):
             return
+        stop_review = getattr(editor, "stop_frame_review", None)
+        if stop_review is not None:
+            stop_review(silent=True)
         artifacts = {}
         mask_path = editor._mask_path_for_frame(info["path"])
         legacy_mask_path = editor._legacy_mask_path_for_frame(info["path"])
-        if os.path.exists(mask_path):
-            artifacts["previous_mask"] = mask_path
-        elif os.path.exists(legacy_mask_path):
-            artifacts["previous_mask"] = legacy_mask_path
-        restored_path = os.path.join(editor.restored_dir, info["filename"])
-        if os.path.exists(restored_path):
-            artifacts["previous_result"] = restored_path
+        reset_paths = [
+            ("previous_mask", mask_path),
+            ("previous_legacy_mask", legacy_mask_path),
+            (
+                "previous_auto_mask",
+                editor._auto_mask_path_for_frame(info["path"]),
+            ),
+            (
+                "previous_selection",
+                editor._selection_path_for_frame(info["path"]),
+            ),
+            ("previous_result", os.path.join(editor.restored_dir, info["filename"])),
+            (
+                "previous_manual_stabilization",
+                os.path.join(editor.manual_stab_dir, info["filename"]),
+            ),
+            (
+                "previous_auto_stabilization",
+                os.path.join(editor.auto_stab_dir, info["filename"]),
+            ),
+            ("previous_upscale", os.path.join(editor.upscaled_dir, info["filename"])),
+        ]
+        layers_root = Path(editor.clean_plate_layers_dir)
+        if layers_root.is_dir():
+            for layer_index, layer_root in enumerate(layers_root.iterdir()):
+                if not layer_root.is_dir():
+                    continue
+                for kind in ("composite", "corrected", "reveal_masks"):
+                    reset_paths.append(
+                        (
+                            f"previous_plate_{kind}_{layer_index}",
+                            str(layer_root / kind / info["filename"]),
+                        )
+                    )
+        for artifact_name, path in reset_paths:
+            if os.path.exists(path):
+                artifacts[artifact_name] = path
         editor.workspace.commit_operation(
             "frame.reset",
             payload={"target": "original"},
             frame_number=info["index"],
             artifacts=artifacts,
         )
-        for path in (mask_path, legacy_mask_path, restored_path):
+        for _artifact_name, path in reset_paths:
             if os.path.exists(path):
                 os.remove(path)
         editor._current_mask = None
         editor._current_mask_path = None
+        editor._selection_mask = None
+        editor._selection_frame_path = None
+        editor._clean_plate_layers_cache = None
+        if hasattr(editor, "_review_preview_cache"):
+            editor._review_preview_cache.clear()
+        if hasattr(editor, "_review_preview_order"):
+            editor._review_preview_order.clear()
+        retouch_controller = getattr(editor, "retouch_controller", None)
+        if retouch_controller is not None:
+            retouch_controller.reset_for_branch()
         editor.view_mode = "original"
         editor.status_var.set(f"Frame {info['index'] + 1} restaurado ao original")
         editor.show_current_frame()
+
+    def reset_all_results_to_original(self):
+        editor = self.editor
+        if not self._workspace_available():
+            return
+        if not messagebox.askyesno(
+            "Reset total dos resultados",
+            "Descartar todas as derivações desta branch e voltar a visualizar os "
+            "frames extraídos do filme original?\n\n"
+            "Serão removidos: restauração, estabilização, upscale, máscaras, "
+            "seleções, camadas de placa e checkpoints.\n\n"
+            "O vídeo original, os frames extraídos, o proxy e as placas limpas "
+            "salvas serão preservados.",
+        ):
+            return
+        stop_review = getattr(editor, "stop_frame_review", None)
+        if stop_review is not None:
+            stop_review(silent=True)
+
+        worktree = Path(editor.workspace.branch_worktree()).resolve()
+        targets = [
+            ("restauração", Path(editor.restored_dir)),
+            ("estabilização manual", Path(editor.manual_stab_dir)),
+            ("estabilização automática", Path(editor.auto_stab_dir)),
+            ("upscale", Path(editor.upscaled_dir)),
+            ("máscaras manuais", Path(editor.masks_dir)),
+            ("máscaras automáticas", Path(editor.auto_masks_dir)),
+            ("seleções", Path(editor.selections_dir)),
+            ("camadas de placa", Path(editor.clean_plate_layers_dir)),
+            ("checkpoints", worktree / ".jobs"),
+        ]
+
+        def reset_task(context):
+            removed_files = 0
+            cleared = []
+            for position, (label, raw_path) in enumerate(targets):
+                context.check_cancelled()
+                target = raw_path.resolve()
+                if target == worktree or worktree not in target.parents:
+                    raise RuntimeError(
+                        f"Diretório de {label} está fora da área de trabalho: {target}"
+                    )
+                if target.exists():
+                    removed_files += sum(1 for path in target.rglob("*") if path.is_file())
+                    shutil.rmtree(target)
+                    cleared.append(label)
+                target.mkdir(parents=True, exist_ok=True)
+                context.report(
+                    (position + 1) * 100.0 / len(targets),
+                    f"Limpando {label} — {position + 1}/{len(targets)}",
+                )
+            editor.workspace.commit_operation(
+                "project.reset_results",
+                payload={
+                    "target": "extracted_original_frames",
+                    "directories": cleared,
+                    "removed_files": removed_files,
+                    "preserved": ["sources", "frames", "proxy", "clean_plates"],
+                },
+            )
+            return {"removed_files": removed_files, "directories": len(cleared)}
+
+        def reset_complete(result):
+            for attribute in (
+                "use_manual_stab_var",
+                "use_auto_stab_var",
+                "view_upscale_var",
+                "use_upscale_render_var",
+            ):
+                variable = getattr(editor, attribute, None)
+                if variable is not None:
+                    variable.set(False)
+            editor._current_mask = None
+            editor._current_mask_path = None
+            editor._selection_mask = None
+            editor._selection_frame_path = None
+            editor._clean_plate_layers_cache = None
+            if hasattr(editor, "_review_preview_cache"):
+                editor._review_preview_cache.clear()
+            if hasattr(editor, "_review_preview_order"):
+                editor._review_preview_order.clear()
+            retouch_controller = getattr(editor, "retouch_controller", None)
+            if retouch_controller is not None:
+                retouch_controller.reset_for_branch()
+            editor.view_mode = "original"
+            editor.status_var.set(
+                f"Reset total concluído — {result['removed_files']} arquivos derivados removidos"
+            )
+            editor.show_current_frame()
+            messagebox.showinfo(
+                "Reset total concluído",
+                f"{result['removed_files']} arquivos derivados foram removidos de "
+                f"{result['directories']} áreas.\n\n"
+                "A visualização voltou aos frames extraídos do filme original. "
+                "As placas limpas continuam disponíveis para edição.",
+            )
+
+        editor._start_ui_job(
+            "Resetar resultados para o original", reset_task, reset_complete
+        )
 
     def _workspace_available(self) -> bool:
         editor = self.editor

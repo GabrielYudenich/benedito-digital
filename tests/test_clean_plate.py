@@ -18,6 +18,7 @@ from core.clean_plate import (
     make_transparent_plate,
     restrict_defect_mask,
 )
+from gui.dialogs.clean_plate_manager_dialog import CleanPlateEditorDialog
 
 
 def _background():
@@ -162,3 +163,25 @@ def test_reveal_mask_restores_source_without_flattening_layer():
     assert np.all(corrected[25:35, 35:55] == 40)
     assert np.all(corrected[:8, :8] == 180)
     assert np.all(composite == 180)
+
+
+def test_plate_editor_transparency_participates_in_undo_and_redo():
+    dialog = object.__new__(CleanPlateEditorDialog)
+    dialog.image = np.full((50, 70, 3), 120, dtype=np.uint8)
+    dialog.noise_mask = np.zeros((50, 70), dtype=np.uint8)
+    dialog.static_mask = np.full((50, 70), 255, dtype=np.uint8)
+    dialog.undo_stack = []
+    dialog.redo_stack = []
+    dialog.brush_size = type("Brush", (), {"get": lambda self: 6})()
+    dialog.tool = "transparent"
+    dialog.last_point = (20, 25)
+    dialog._schedule_redraw = lambda: None
+
+    dialog._push_undo()
+    dialog._apply_point((28, 25))
+
+    assert dialog.static_mask[25, 24] == 0
+    dialog._undo()
+    assert np.all(dialog.static_mask == 255)
+    dialog._redo()
+    assert dialog.static_mask[25, 24] == 0

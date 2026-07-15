@@ -491,6 +491,10 @@ class EditorScreen:
         version_menu.add_command(label="Histórico do frame", command=self.show_current_frame_history)
         version_menu.add_separator()
         version_menu.add_command(label="Resetar frame para o original", command=self.reset_current_frame_to_original)
+        version_menu.add_command(
+            label="Resetar todos os resultados para os frames originais...",
+            command=self.reset_all_results_to_original,
+        )
         menubar.add_cascade(label="Versionamento", menu=version_menu)
 
         workflow_menu = tk.Menu(menubar, tearoff=0)
@@ -712,6 +716,9 @@ class EditorScreen:
 
     def reset_current_frame_to_original(self):
         self.version_controller.reset_current_frame_to_original()
+
+    def reset_all_results_to_original(self):
+        self.version_controller.reset_all_results_to_original()
 
     def _toggle_var(self, var):
         try:
@@ -7255,6 +7262,7 @@ class EditorScreen:
         plate = cv2.imread(str(record.plate_path), cv2.IMREAD_COLOR)
         static_mask = cv2.imread(str(record.static_mask_path), cv2.IMREAD_GRAYSCALE)
         transparent_path = record.directory / "plate_rgba.png"
+        original_mask_path = record.directory / "static_background_original.png"
         if plate is None or static_mask is None or not cv2.imwrite(
             str(transparent_path), make_transparent_plate(plate, static_mask)
         ):
@@ -7273,6 +7281,11 @@ class EditorScreen:
                     "generated_original": original_path,
                     "background_mask": record.static_mask_path,
                     "transparent_plate": transparent_path,
+                    **(
+                        {"background_mask_original": original_mask_path}
+                        if original_mask_path.is_file()
+                        else {}
+                    ),
                 },
             )
         self.status_var.set(
