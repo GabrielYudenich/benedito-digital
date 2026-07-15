@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "family": "unet_dust",
+  "task": "dust_mask",
+  "license": "MIT",
+  "source": "https://github.com/jvanvugt/pytorch-unet",
+  "attribution": "Joris van Vugt, 2018",
+  "architecture": {
+    "in_channels": 3,
+    "wf": 4,
+    "depth": 4,
+    "n_classes": 1,
+    "padding": true,
+    "up_mode": "upconv",
+    "batch_norm": true
+  },
+  "weights": [
+    {
+      "name": "dust16_19.pth",
+      "sha256": "ddb6f0e0bac161c6b8eff2a94f42e166d750be2a9c410b2142b5c65318017541",
+      "size": 1959311
+    },
+    {
+      "name": "dust8_19.pth",
+      "sha256": "ae06c997df165e21820bf1820dc8e5722e9ae0e896391b6ed124a85667fc974a",
+      "size": 1959315
+    }
+  ]
+}

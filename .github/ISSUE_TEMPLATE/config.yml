@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Relatar vulnerabilidade em privado
+    url: https://github.com/GabrielYudenich/benedito-digital/security/advisories/new
+    about: Não publique vulnerabilidades em issues.
+  - name: Guia de suporte
+    url: https://github.com/GabrielYudenich/benedito-digital/blob/develop/SUPPORT.md
+    about: Consulte documentação e orientações antes de abrir uma issue.

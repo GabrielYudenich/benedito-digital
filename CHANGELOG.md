@@ -1,0 +1,94 @@
+# Changelog
+
+As mudanças relevantes deste projeto serão registradas aqui. O formato segue
+[Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e o versionamento seguirá
+[Semantic Versioning](https://semver.org/lang/pt-BR/) a partir da primeira versão estável.
+
+## [Unreleased]
+
+### Adicionado
+
+- placa limpa RGBA com movimento transparente, proteção dinâmica por frame e camada reversível;
+- pincéis para retirar ou restaurar diretamente o alpha da placa limpa;
+- pincel de revelação para recuperar partes do frame inferior cobertas pela placa limpa;
+- reset total guiado das derivações da branch, preservando fontes, frames e placas;
+- reset isolado por posicionamento, preservando resultados dos demais intervalos;
+- reaplicação oferecida imediatamente após editar a imagem ou o alpha da placa;
+- acesso direto ao pincel de revelação da layer no frame atual;
+- placa e pincel de revelação usam estabilização/original limpos, nunca um `restored` legado contaminado;
+- correções reativam com segurança somente o frame atual quando a metadata da layer está ausente;
+- prévia do pincel mostra o resultado real por padrão, com máscara amarela opcional;
+- alinhamento preciso da placa por frame com translação, rotação, escala e fallback seguro;
+- normalização temporal não destrutiva de luz e contraste por posicionamento, com referência
+  mediana, intensidade configurável, progresso e atalho personalizável;
+- workspace versionado com branches, histórico, merge visual e originais imutáveis;
+- processamento retomável por chunks, fila em segundo plano, progresso e cancelamento;
+- seleções, clone, healing, máscaras, filtros por intervalo e análise de danos;
+- detecção de perfurações e alinhamento de película;
+- colaboração incremental segura por pasta com CLI `push` e `pull`;
+- timeline multipista com áudio, transições, keyframes e render FFmpeg;
+- histograma RGB, waveform, vectorscope e preferências de acessibilidade;
+- registro compacto de modelos e pesos U-Net Dust com créditos e hashes;
+- build MSI, validação de release, manifesto de atualização e workflows GitHub Actions;
+- migração versionada de workspaces e estados visuais antigos;
+- recuperação automática de JSON e checkpoints após gravação interrompida, com backup e quarentena;
+- importação guiada do filme inteiro ou de trecho lossless FFV1 com intervalo exato;
+- estimativa e preflight de espaço livre para importação e sequências PNG.
+- árvore de mídia por fonte com proxies e frames paginados;
+- player de referência com áudio opcional por FFplay.
+- formatos de trecho selecionáveis: MKV/FFV1, MOV/ProRes 422 HQ e MP4/H.264;
+- análise de canais e centralização opcional de áudio presente somente em um lado.
+- dropdowns escuros com contraste consistente no campo e na lista de opções;
+- catálogo lateral não bloqueante, paginado e com cache gerado em segundo plano;
+- zoom ancorado no cursor, pan com botão direito e render somente do viewport visível;
+- visualização duplicada para um segundo monitor;
+- ícones nas ferramentas de seleção, pintura, borracha, clone e healing.
+- intervalos reutilizáveis por posicionamento de câmera, com detecção automática de cortes;
+- placa limpa para câmera estática, com fundo mediano e proteção de foreground;
+- menu de sujeira automática com detecção, correção, ocultação e remoção por frame.
+- visão geral colorida para trecho ativo, posicionamentos, avisos e frame atual;
+- reprodução silenciosa dos frames em ambos os sentidos, de `0.25x` a `4x`;
+- recorte espacial reutilizável em todo o segmento de uma placa limpa.
+- catálogo lateral paginado em lista ou miniaturas, com busca por número e filtro de estado;
+- avisos coloridos no catálogo e na visão geral para cada estado de revisão do frame;
+- painel destacável de revisão com observação, navegação e atalho `Shift+S`.
+- avisos sincronizados também na árvore de mídia já expandida;
+- corte útil não destrutivo, com filtro de frames fora do corte e originais preservados;
+- menu de restauração com acesso direto a placa limpa, estabilização e pré-render;
+- pré-renderização por posicionamento estabilizado;
+- propriedades avançadas em janela independente e atalhos configuráveis por usuário;
+- segunda tela com modos original, resultado e comparação, divisor, playback e contadores;
+- opção de incorporar frame e timecodes no render final.
+- playback de frames com quatro workers, buffer curto e cache 720p compartilhado pelas telas;
+- contadores maiores, centralizados e divididos em duas linhas na segunda tela;
+- oferta de proxy antes de reproduzir diretamente arquivos de preservação grandes;
+- escolha obrigatória entre posicionamento, trecho ativo e filme inteiro antes de estabilizar
+  ou criar placa limpa;
+- cancelamento cooperativo da estabilização e limpeza imediata do indicador da barra de status;
+- atalhos independentes de Caps Lock e Num Lock.
+- gerenciador de placas limpas com prévia, caminho, diagnóstico e contagem de frames alterados;
+- editor de placa com remoção de ruído, Clone, Healing, zoom, pan, máscara estática e histórico;
+- preservação da placa gerada originalmente e reaplicação explícita da versão editada ao trecho.
+- escolha de frame-base nítido e modo explícito para reconstruir todo o fundo estático;
+- recriação direta de placas antigas, adaptação tonal por frame e máscara com bordas suavizadas.
+
+### Alterado
+
+- repositórios completos de modelos foram substituídos por adaptadores mínimos e avisos;
+- projetos grandes passam a usar proxies, chunks, checkpoints e deduplicação;
+- versão interna elevada para `1.1.0` como candidata de pré-lançamento.
+- frames de fontes diferentes passam a usar diretórios separados.
+- pincel e borracha passam a interpolar o traço, respeitar o raio e salvar apenas ao soltar;
+- miniaturas deixam a área inferior e passam ao catálogo lateral, preservando o canvas;
+- trechos digitados ou definidos por `I` e `O` passam a ficar ativos sem botão de confirmação;
+- cenas/câmeras passam a se chamar posicionamentos de câmera, com detecção mais sensível à composição;
+- placas limpas passam a continuar sobre a derivação estabilizada quando ela estiver ativa.
+- a geração e a reaplicação de placas passam a priorizar os frames estabilizados ativos.
+- a mediana temporal passa a definir a máscara, sem substituir a nitidez do frame-base.
+
+### Segurança
+
+- importação colaborativa valida hashes, caminhos, identidade do projeto e cadeia de operações;
+- atualizações aceitam somente manifesto HTTPS e checksum antes de qualquer ação do usuário.
+
+Não existe release estável publicada no momento.

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "families": {
+    "swinir": {
+      "name": "SwinIR",
+      "tasks": ["denoise", "super_resolution"],
+      "license": "Apache-2.0",
+      "source": "https://github.com/JingyunLiang/SwinIR",
+      "attribution": "Jingyun Liang, Jiezhang Cao, Guolei Sun, Kai Zhang, Luc Van Gool, Radu Timofte"
+    },
+    "restormer": {
+      "name": "Restormer",
+      "tasks": ["denoise", "deblur"],
+      "license": "MIT",
+      "source": "https://github.com/swz30/Restormer",
+      "attribution": "Syed Waqas Zamir and contributors"
+    },
+    "unet_dust": {
+      "name": "PyTorch U-Net Dust",
+      "tasks": ["dust_mask"],
+      "license": "MIT",
+      "source": "https://github.com/jvanvugt/pytorch-unet",
+      "attribution": "Joris van Vugt, 2018"
+    },
+    "dncnn_kair": {
+      "name": "DnCNN / KAIR",
+      "tasks": ["denoise"],
+      "license": "review-upstream",
+      "source": "https://github.com/cszn/KAIR",
+      "attribution": "Kai Zhang and KAIR contributors"
+    },
+    "bsrgan": {
+      "name": "BSRGAN / RRDB",
+      "tasks": ["super_resolution"],
+      "license": "review-upstream",
+      "source": "https://github.com/cszn/BSRGAN",
+      "attribution": "Kai Zhang and BSRGAN contributors"
+    }
+  },
+  "optional_packages": [
+    {
+      "id": "ltx-2.3",
+      "name": "LTX-2.3",
+      "provider": "Lightricks",
+      "tasks": ["retake", "keyframe_interpolation", "video_to_video"],
+      "status": "experimental-planned",
+      "install_policy": "optional-after-install",
+      "license": "LTX-2 Community License Agreement",
+      "source": "https://github.com/Lightricks/LTX-2",
+      "weights_source": "https://huggingface.co/Lightricks/LTX-2.3",
+      "minimum_download": "47,1 GB mais o codificador Gemma 3",
+      "requirements": "Python 3.12+, CUDA > 12.7 e PyTorch ~= 2.7",
+      "notes": "Uso generativo experimental. Não substitui restauração arquivística fiel e nunca altera o original."
+    }
+  ]
+}

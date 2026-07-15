@@ -1,0 +1,12 @@
+{
+  "provider": "BtbN/FFmpeg-Builds",
+  "release_tag": "autobuild-2026-07-12-13-16",
+  "ffmpeg_version": "8.1.2-22-g94138f6973",
+  "variant": "win64-lgpl-shared-8.1",
+  "license": "LGPL-2.1-or-later",
+  "archive_name": "ffmpeg-n8.1.2-22-g94138f6973-win64-lgpl-shared-8.1.zip",
+  "archive_url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-12-13-16/ffmpeg-n8.1.2-22-g94138f6973-win64-lgpl-shared-8.1.zip",
+  "archive_sha256": "08c967cc9a52e23eec43e7a50dd42b02f64e22d6ee4ef51de684fe55b7f69a75",
+  "build_source": "https://github.com/BtbN/FFmpeg-Builds/tree/ca65803800fa316b49813e653e57b45808cfc087",
+  "ffmpeg_source": "https://github.com/FFmpeg/FFmpeg/tree/94138f6973"
+}
