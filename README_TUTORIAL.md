@@ -93,18 +93,20 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
    no gerenciador de posicionamentos.
 9. Ative `Usar a seleção atual como recorte em todo o trecho`. O mesmo recorte será
    reutilizado nos frames do segmento, sem depender de uma seleção separada em cada frame.
-10. O Benedito alinha amostras, calcula um fundo mediano e mede se a câmera realmente
-   permaneceu estática antes de alterar qualquer frame.
-11. A aplicação usa somente sujeiras pequenas no fundo estável. Rostos, braços e outros
-   movimentos grandes são protegidos e permanecem no frame original.
+10. Escolha o primeiro frame do trecho, o frame atualmente aberto ou a amostra mais nítida
+    como base visual. A mediana temporal identifica o que é fundo, mas não desfoca a placa.
+11. Use `Reconstruir todo o fundo estático` para um resultado visível, ou o modo conservador
+    para corrigir somente poeira e riscos. Rostos, braços e movimentos permanecem protegidos.
 12. Se a câmera se mover além do limite seguro, a placa é preservada para inspeção, mas
    não é aplicada automaticamente. Estabilize ou reduza o segmento e tente novamente.
 13. Abra o botão `Placas limpas` ou `Restauração > Gerenciar e editar placas limpas` para
     visualizar a imagem gerada, seu caminho, intervalo e quantos frames foram alterados.
 14. Em `Editar placa`, pinte poeira ou riscos e use `Remover ruído marcado`. Clone e Healing
     usam o botão direito para definir a origem e o botão esquerdo para aplicar o retoque.
-15. Salve a placa e escolha `Reaplicar ao trecho`. A imagem gerada originalmente fica
-    preservada em `plate_original.png`, e os frames sem defeitos seguros continuam intactos.
+15. Salve a placa e escolha `Reaplicar ao trecho`, confirmando novamente fundo completo ou
+    somente defeitos. A imagem gerada originalmente fica preservada em `plate_original.png`.
+16. Placas criadas antes deste fluxo aparecem como antigas no gerenciador. Use `Recriar placa`
+    para repetir exatamente o intervalo com a nova base nítida e a máscara suavizada.
 
 **7. Restaurar**
 1. Abra `Propriedades > Abrir propriedades avançadas` para ajustar o `Preset Global` e

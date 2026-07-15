@@ -17,14 +17,22 @@ from core.retouch import apply_retouch_dab
 
 
 class CleanPlateManagerDialog:
-    def __init__(self, parent, records, edit_callback, reapply_callback):
+    def __init__(
+        self,
+        parent,
+        records,
+        edit_callback,
+        reapply_callback,
+        rebuild_callback,
+    ):
         self.records = list(records)
         self.edit_callback = edit_callback
         self.reapply_callback = reapply_callback
+        self.rebuild_callback = rebuild_callback
         self.window = tk.Toplevel(parent)
         self.window.title("Placas limpas do projeto")
-        self.window.geometry("1040x700")
-        self.window.minsize(850, 600)
+        self.window.geometry("1180x700")
+        self.window.minsize(900, 600)
         self.window.transient(parent)
 
         container = ttk.Frame(self.window, padding=20)
@@ -93,6 +101,12 @@ class CleanPlateManagerDialog:
         self.folder_button.pack(side=tk.LEFT)
         self.edit_button = ttk.Button(footer, text="Editar placa...", command=self._edit)
         self.edit_button.pack(side=tk.LEFT, padx=8)
+        self.rebuild_button = ttk.Button(
+            footer,
+            text="Recriar placa...",
+            command=self._rebuild,
+        )
+        self.rebuild_button.pack(side=tk.LEFT, padx=(0, 8))
         self.reapply_button = ttk.Button(
             footer,
             text="Reaplicar ao trecho",
@@ -115,7 +129,12 @@ class CleanPlateManagerDialog:
                 ),
             )
         state = tk.NORMAL if self.records else tk.DISABLED
-        for button in (self.folder_button, self.edit_button, self.reapply_button):
+        for button in (
+            self.folder_button,
+            self.edit_button,
+            self.rebuild_button,
+            self.reapply_button,
+        ):
             button.configure(state=state)
         if self.records:
             self.tree.selection_set("0")
@@ -145,11 +164,18 @@ class CleanPlateManagerDialog:
         self.preview.image = photo
         motion = float(record.diagnostics.get("mean_camera_motion", 0.0))
         ratio = float(record.diagnostics.get("static_ratio", 0.0)) * 100.0
+        sharpness = record.diagnostics.get("plate_sharpness")
+        quality = (
+            f"Nitidez da placa: {float(sharpness):.1f}\n"
+            if sharpness is not None
+            else "Placa antiga: recrie o mesmo trecho para usar a nova base nítida.\n"
+        )
         self.details_var.set(
             f"ID: {record.plate_id}\n"
             f"Trecho: frames {record.start + 1}–{record.end + 1} "
             f"({record.frame_count} frames)\n"
             f"Fundo estável: {ratio:.1f}%  •  movimento médio: {motion:.2f} px\n"
+            f"{quality}"
             f"Frames efetivamente alterados: {record.modified_frames}\n"
             f"Arquivo: {record.plate_path}"
         )
@@ -184,13 +210,81 @@ class CleanPlateManagerDialog:
         record = self.selected_record()
         if record is None:
             return
-        if messagebox.askyesno(
-            "Reaplicar placa limpa",
-            f"Aplicar novamente a placa editada nos frames "
-            f"{record.start + 1}–{record.end + 1}?",
-            parent=self.window,
-        ):
-            self.reapply_callback(record)
+        CleanPlateApplicationDialog(
+            self.window,
+            record,
+            lambda mode: self.reapply_callback(record, mode),
+        )
+
+    def _rebuild(self):
+        record = self.selected_record()
+        if record is not None:
+            self.rebuild_callback(record)
+
+
+class CleanPlateApplicationDialog:
+    def __init__(self, parent, record, apply_callback):
+        self.apply_callback = apply_callback
+        self.window = tk.Toplevel(parent)
+        self.window.title("Como reaplicar a placa?")
+        self.window.geometry("650x430")
+        self.window.resizable(False, False)
+        self.window.transient(parent)
+        self.window.grab_set()
+
+        container = ttk.Frame(self.window, padding=22)
+        container.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(
+            container,
+            text="Aplicar placa limpa",
+            font=("Segoe UI", 17, "bold"),
+        ).pack(anchor=tk.W)
+        ttk.Label(
+            container,
+            text=f"Trecho: frames {record.start + 1}–{record.end + 1}",
+        ).pack(anchor=tk.W, pady=(3, 16))
+
+        self.mode_var = tk.StringVar(value="background")
+        visible = ttk.LabelFrame(container, text="Resultado visível — recomendado", padding=12)
+        visible.pack(fill=tk.X)
+        ttk.Radiobutton(
+            visible,
+            text="Reconstruir todo o fundo considerado estático",
+            variable=self.mode_var,
+            value="background",
+        ).pack(anchor=tk.W)
+        ttk.Label(
+            visible,
+            text=(
+                "Usa a placa em toda a área estática e protege pessoas ou objetos em "
+                "movimento. É a opção correta para realmente trocar o fundo do trecho."
+            ),
+            wraplength=560,
+        ).pack(anchor=tk.W, padx=(22, 0), pady=(5, 0))
+
+        conservative = ttk.LabelFrame(container, text="Retoque conservador", padding=12)
+        conservative.pack(fill=tk.X, pady=(12, 0))
+        ttk.Radiobutton(
+            conservative,
+            text="Substituir somente poeira e riscos detectados",
+            variable=self.mode_var,
+            value="defects",
+        ).pack(anchor=tk.W)
+        ttk.Label(
+            conservative,
+            text="Pode alterar poucos frames e produzir uma diferença quase imperceptível.",
+            wraplength=560,
+        ).pack(anchor=tk.W, padx=(22, 0), pady=(5, 0))
+
+        footer = ttk.Frame(container)
+        footer.pack(fill=tk.X, side=tk.BOTTOM, pady=(16, 0))
+        ttk.Button(footer, text="Cancelar", command=self.window.destroy).pack(side=tk.RIGHT)
+        ttk.Button(footer, text="Aplicar ao trecho", command=self._apply).pack(side=tk.RIGHT, padx=8)
+
+    def _apply(self):
+        mode = self.mode_var.get()
+        self.window.destroy()
+        self.apply_callback(mode)
 
 
 class CleanPlateEditorDialog:

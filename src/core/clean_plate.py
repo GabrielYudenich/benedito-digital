@@ -55,27 +55,44 @@ def build_clean_plate(
     frames: list[np.ndarray],
     *,
     maximum_samples: int = 15,
+    base_frame: np.ndarray | None = None,
+    base_strategy: str = "median",
     progress_callback: Callable[[float], None] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
-    """Build a median plate and identify pixels belonging to a stable background."""
+    """Build a sharp clean plate and identify pixels belonging to a stable background."""
     if len(frames) < 3:
         raise ValueError("At least three frames are required for a clean plate")
+    if base_strategy not in {"sharpest", "selected", "median"}:
+        raise ValueError("Clean-plate base strategy is invalid")
     indices = np.linspace(
         0, len(frames) - 1, min(maximum_samples, len(frames)), dtype=int
     )
-    reference = frames[len(frames) // 2]
+    sampled_frames = [frames[index] for index in indices]
+    selected_sample = None
+    if base_frame is not None:
+        reference = base_frame
+        effective_strategy = "selected"
+    elif base_strategy == "sharpest":
+        sharpness_scores = [_sharpness_score(frame) for frame in sampled_frames]
+        selected_sample = int(np.argmax(sharpness_scores))
+        reference = sampled_frames[selected_sample]
+        effective_strategy = "sharpest"
+    else:
+        reference = frames[len(frames) // 2]
+        effective_strategy = "median"
     height, width = reference.shape[:2]
+    reference = cv2.resize(reference, (width, height), interpolation=cv2.INTER_AREA)
     aligned = []
     motions = []
-    for position, index in enumerate(indices):
-        frame = cv2.resize(frames[index], (width, height), interpolation=cv2.INTER_AREA)
+    for position, frame in enumerate(sampled_frames):
+        frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
         registered, motion, _warp = _align_translation(frame, reference)
         aligned.append(registered)
         motions.append(motion)
         if progress_callback:
             progress_callback((position + 1) * 55.0 / len(indices))
     stack = np.stack(aligned, axis=0)
-    plate = np.median(stack, axis=0).astype(np.uint8)
+    median_plate = np.median(stack, axis=0).astype(np.uint8)
     gray_stack = np.stack(
         [cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) for frame in aligned], axis=0
     ).astype(np.float32)
@@ -89,14 +106,41 @@ def build_clean_plate(
     static_mask = cv2.morphologyEx(
         static_mask, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8)
     )
+    static_mask = _keep_components(
+        static_mask,
+        max(64, int(static_mask.size * 0.002)),
+        static_mask.size,
+    )
+    nonstatic_mask = _keep_components(
+        cv2.bitwise_not(static_mask),
+        max(96, int(static_mask.size * 0.0015)),
+        static_mask.size,
+    )
+    static_mask = cv2.bitwise_not(nonstatic_mask)
+    static_mask = cv2.erode(static_mask, np.ones((5, 5), np.uint8), iterations=1)
+    repaired_pixels = 0
+    if effective_strategy == "median":
+        plate = median_plate
+        base = median_plate
+    else:
+        base = reference if base_frame is not None else sampled_frames[selected_sample]
+        base = cv2.resize(base, (width, height), interpolation=cv2.INTER_AREA)
+        plate = base.copy()
     static_ratio = float(np.count_nonzero(static_mask)) / static_mask.size
     mean_motion = float(np.mean(motions)) if motions else 0.0
+    static_pixels = static_mask > 0
     diagnostics = {
         "samples": len(aligned),
         "static_ratio": static_ratio,
         "mean_camera_motion": mean_motion,
         "camera_static": static_ratio >= 0.45 and mean_motion <= max(width, height) * 0.025,
         "stability_threshold": stability_threshold,
+        "base_strategy": effective_strategy,
+        "base_sample": selected_sample,
+        "base_sharpness": _sharpness_score(base, static_pixels),
+        "median_sharpness": _sharpness_score(median_plate, static_pixels),
+        "plate_sharpness": _sharpness_score(plate, static_pixels),
+        "base_repaired_pixels": repaired_pixels,
     }
     if progress_callback:
         progress_callback(100.0)
@@ -108,8 +152,12 @@ def apply_clean_plate(
     plate: np.ndarray,
     static_mask: np.ndarray,
     defect_mask: np.ndarray,
+    *,
+    application_mode: str = "defects",
 ) -> tuple[np.ndarray, dict]:
     """Replace only detected background defects and protect large foreground motion."""
+    if application_mode not in {"defects", "background"}:
+        raise ValueError("Clean-plate application mode is invalid")
     height, width = current.shape[:2]
     plate = cv2.resize(plate, (width, height), interpolation=cv2.INTER_CUBIC)
     static_mask = cv2.resize(
@@ -128,20 +176,28 @@ def apply_clean_plate(
             borderMode=cv2.BORDER_CONSTANT,
             borderValue=0,
         )
+    if application_mode == "background":
+        plate = _match_plate_tone(plate, current, static_mask)
     difference = cv2.absdiff(current, plate)
     difference_gray = cv2.cvtColor(difference, cv2.COLOR_BGR2GRAY)
-    foreground_candidate = np.where(difference_gray >= 24, 255, 0).astype(np.uint8)
-    minimum_foreground_area = max(96, int(height * width * 0.0006))
-    foreground = _keep_components(
-        foreground_candidate,
-        minimum_foreground_area,
-        height * width,
-        dilate=4,
-    )
+    if application_mode == "background":
+        foreground = cv2.bitwise_not(static_mask)
+    else:
+        foreground_candidate = np.where(
+            difference_gray >= 24, 255, 0
+        ).astype(np.uint8)
+        minimum_foreground_area = max(96, int(height * width * 0.0006))
+        foreground = _keep_components(
+            foreground_candidate,
+            minimum_foreground_area,
+            height * width,
+            dilate=4,
+        )
     effective = cv2.bitwise_and(defect_mask, static_mask)
     effective = cv2.bitwise_and(effective, cv2.bitwise_not(foreground))
     effective = cv2.dilate(effective, np.ones((3, 3), np.uint8), iterations=1)
-    alpha = cv2.GaussianBlur(effective, (0, 0), sigmaX=1.1).astype(np.float32) / 255.0
+    feather = 6.0 if application_mode == "background" else 1.1
+    alpha = cv2.GaussianBlur(effective, (0, 0), sigmaX=feather).astype(np.float32) / 255.0
     output = (
         current.astype(np.float32) * (1.0 - alpha[..., None])
         + plate.astype(np.float32) * alpha[..., None]
@@ -150,6 +206,7 @@ def apply_clean_plate(
         "replaced_pixels": int(np.count_nonzero(effective)),
         "protected_foreground_pixels": int(np.count_nonzero(foreground)),
         "plate_alignment_motion": plate_motion,
+        "application_mode": application_mode,
     }
     return np.clip(output, 0, 255).astype(np.uint8), diagnostics
 
@@ -204,6 +261,37 @@ def _align_translation(frame: np.ndarray, reference: np.ndarray):
         return aligned, motion, warp
     except cv2.error:
         return frame, 0.0, None
+
+
+def _sharpness_score(image: np.ndarray, mask: np.ndarray | None = None) -> float:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+    values = laplacian[mask] if mask is not None and np.any(mask) else laplacian
+    return float(values.var())
+
+
+def _match_plate_tone(
+    plate: np.ndarray,
+    current: np.ndarray,
+    static_mask: np.ndarray,
+) -> np.ndarray:
+    valid = static_mask > 0
+    if np.count_nonzero(valid) < 256:
+        return plate
+    matched = plate.astype(np.float32)
+    current_float = current.astype(np.float32)
+    for channel in range(min(3, plate.shape[2])):
+        plate_values = matched[..., channel][valid]
+        current_values = current_float[..., channel][valid]
+        plate_mean = float(np.mean(plate_values))
+        current_mean = float(np.mean(current_values))
+        plate_std = max(1.0, float(np.std(plate_values)))
+        current_std = max(1.0, float(np.std(current_values)))
+        scale = float(np.clip(current_std / plate_std, 0.82, 1.22))
+        matched[..., channel] = (
+            matched[..., channel] - plate_mean
+        ) * scale + current_mean
+    return np.clip(matched, 0, 255).astype(np.uint8)
 
 
 def _keep_components(mask, minimum_area, maximum_area, *, dilate=0):

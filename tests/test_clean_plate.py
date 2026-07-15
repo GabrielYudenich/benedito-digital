@@ -82,3 +82,55 @@ def test_shared_plate_region_is_reused_instead_of_per_frame_selection():
 
     assert np.count_nonzero(restricted[:, :10]) == 0
     assert np.all(restricted[:, 20:] == 255)
+
+
+def test_selected_base_keeps_more_detail_than_temporal_median():
+    sharp = _background()
+    cv2.putText(
+        sharp,
+        "FUNDO",
+        (15, 72),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.1,
+        (240, 240, 240),
+        2,
+        cv2.LINE_AA,
+    )
+    frames = [cv2.GaussianBlur(sharp, (0, 0), 1.7) for _ in range(7)]
+    frames.insert(0, sharp.copy())
+
+    plate, _static_mask, diagnostics = build_clean_plate(
+        frames,
+        base_frame=sharp,
+        base_strategy="selected",
+    )
+
+    assert diagnostics["base_strategy"] == "selected"
+    assert diagnostics["plate_sharpness"] > diagnostics["median_sharpness"] * 1.35
+    assert np.mean(cv2.absdiff(plate, sharp)) < 8
+
+
+def test_background_application_replaces_static_area_but_protects_subject():
+    plate = _background()
+    current = cv2.GaussianBlur(plate, (0, 0), 1.4)
+    current = np.clip(current.astype(np.int16) - 16, 0, 255).astype(np.uint8)
+    cv2.rectangle(current, (58, 42), (118, 112), (20, 20, 235), -1)
+    static_mask = np.full(current.shape[:2], 255, dtype=np.uint8)
+    static_mask[38:117, 53:123] = 0
+    whole_background = np.full(current.shape[:2], 255, dtype=np.uint8)
+
+    restored, diagnostics = apply_clean_plate(
+        current,
+        plate,
+        static_mask,
+        whole_background,
+        application_mode="background",
+    )
+
+    assert diagnostics["application_mode"] == "background"
+    assert diagnostics["replaced_pixels"] > current.shape[0] * current.shape[1] * 0.45
+    current_detail = cv2.Laplacian(current[:35], cv2.CV_64F).var()
+    restored_detail = cv2.Laplacian(restored[:35], cv2.CV_64F).var()
+    assert restored_detail > current_detail * 1.2
+    assert abs(float(restored[:35].mean()) - float(current[:35].mean())) < 3
+    assert np.max(cv2.absdiff(restored[52:102, 68:108], current[52:102, 68:108])) <= 5

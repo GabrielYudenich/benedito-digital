@@ -79,10 +79,11 @@ refina somente os cortes candidatos. Ela não carrega todos os frames de um film
 memória. A sensibilidade pode ser Detalhada, Equilibrada ou Conservadora, e os intervalos
 salvos podem ser reutilizados por estabilização, filtros e restauração.
 
-A placa limpa usa no máximo 15 amostras do intervalo para construir o fundo mediano. Ao
-aplicar, somente o frame atual, os dois vizinhos, a placa e as máscaras ficam na memória.
-Objetos grandes que diferem do fundo são tratados como foreground protegido. Por segurança,
-uma câmera considerada móvel impede a aplicação automática e mantém os frames intactos.
+A placa limpa usa no máximo 15 amostras para identificar o fundo estático, mas preserva a
+nitidez de um frame-base escolhido pelo usuário ou automaticamente. Ao aplicar, somente o
+frame atual, os dois vizinhos, a placa e as máscaras ficam na memória. O modo completo troca
+todo o fundo estático com máscara suavizada e adaptação tonal por frame; o modo conservador
+troca somente defeitos detectados. Uma câmera móvel impede a aplicação automática.
 
 Quando existe estabilização manual ou automática ativa, a placa usa essa sequência como
 entrada e grava o resultado na mesma derivação estabilizada. Uma seleção espacial pode ser

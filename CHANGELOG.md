@@ -56,6 +56,8 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - gerenciador de placas limpas com prévia, caminho, diagnóstico e contagem de frames alterados;
 - editor de placa com remoção de ruído, Clone, Healing, zoom, pan, máscara estática e histórico;
 - preservação da placa gerada originalmente e reaplicação explícita da versão editada ao trecho.
+- escolha de frame-base nítido e modo explícito para reconstruir todo o fundo estático;
+- recriação direta de placas antigas, adaptação tonal por frame e máscara com bordas suavizadas.
 
 ### Alterado
 
@@ -69,6 +71,7 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - cenas/câmeras passam a se chamar posicionamentos de câmera, com detecção mais sensível à composição;
 - placas limpas passam a continuar sobre a derivação estabilizada quando ela estiver ativa.
 - a geração e a reaplicação de placas passam a priorizar os frames estabilizados ativos.
+- a mediana temporal passa a definir a máscara, sem substituir a nitidez do frame-base.
 
 ### Segurança
 

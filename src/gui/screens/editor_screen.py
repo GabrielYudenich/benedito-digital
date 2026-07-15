@@ -7131,7 +7131,17 @@ class EditorScreen:
             records,
             self._open_clean_plate_editor,
             self._reapply_clean_plate,
+            self._rebuild_clean_plate,
         )
+
+    def _rebuild_clean_plate(self, record):
+        self.range_start_var.set(str(record.start + 1))
+        self.range_end_var.set(str(record.end + 1))
+        self._update_range_summary()
+        self.status_var.set(
+            f"Recriando placa — frames {record.start + 1}–{record.end + 1}"
+        )
+        self._show_clean_plate_build_dialog(record.start, record.end)
 
     def _open_clean_plate_editor(self, record, parent=None, on_saved=None):
         try:
@@ -7171,7 +7181,7 @@ class EditorScreen:
             return self.auto_stab_dir
         return self.restored_dir
 
-    def _reapply_clean_plate(self, record):
+    def _reapply_clean_plate(self, record, application_mode="background"):
         if not self.frame_manager or not self.frame_manager.frames:
             messagebox.showwarning("Placa limpa", "Nenhum frame está carregado.")
             return
@@ -7215,19 +7225,25 @@ class EditorScreen:
                 following = cv2.imread(
                     source_paths[min(end, frame_index + 1)], cv2.IMREAD_COLOR
                 )
-                defect_mask = detect_transient_defects(previous, current, following)
-                original_path = os.path.join(frames_dir, frames[frame_index])
-                for extra_path in (
-                    self._mask_path_for_frame(original_path),
-                    self._auto_mask_path_for_frame(original_path),
-                ):
-                    extra = (
-                        cv2.imread(extra_path, cv2.IMREAD_GRAYSCALE)
-                        if os.path.exists(extra_path)
-                        else None
+                if application_mode == "background":
+                    defect_mask = np.full(current.shape[:2], 255, dtype=np.uint8)
+                else:
+                    defect_mask = detect_transient_defects(
+                        previous, current, following
                     )
-                    if extra is not None:
-                        defect_mask = cv2.bitwise_or(defect_mask, extra)
+                original_path = os.path.join(frames_dir, frames[frame_index])
+                if application_mode == "defects":
+                    for extra_path in (
+                        self._mask_path_for_frame(original_path),
+                        self._auto_mask_path_for_frame(original_path),
+                    ):
+                        extra = (
+                            cv2.imread(extra_path, cv2.IMREAD_GRAYSCALE)
+                            if os.path.exists(extra_path)
+                            else None
+                        )
+                        if extra is not None:
+                            defect_mask = cv2.bitwise_or(defect_mask, extra)
                 frame_selection = None
                 if application_region is None:
                     frame_selection = self._load_selection_cv(
@@ -7239,7 +7255,11 @@ class EditorScreen:
                     application_region=application_region,
                 )
                 restored, diagnostics = apply_clean_plate(
-                    current, plate, static_mask, defect_mask
+                    current,
+                    plate,
+                    static_mask,
+                    defect_mask,
+                    application_mode=application_mode,
                 )
                 replaced = int(diagnostics["replaced_pixels"])
                 if replaced:
@@ -7259,6 +7279,7 @@ class EditorScreen:
                                 "run_id": run_id,
                                 "start": start,
                                 "end": end,
+                                "application_mode": application_mode,
                                 "foreground_protection": True,
                                 "output_dir": output_dir,
                             },
@@ -7274,6 +7295,7 @@ class EditorScreen:
                 "replaced_pixels": replaced_pixels,
                 "total": end - start + 1,
                 "output_dir": output_dir,
+                "application_mode": application_mode,
             }
 
         def reapply_complete(result):
@@ -7283,9 +7305,14 @@ class EditorScreen:
             messagebox.showinfo(
                 "Placa limpa reaplicada",
                 f"Frames modificados: {result['modified']}/{result['total']}\n"
-                f"Pixels de defeitos substituídos: {result['replaced_pixels']:,}\n"
+                f"Pixels substituídos: {result['replaced_pixels']:,}\n"
+                f"Aplicação: {'fundo estático completo' if result['application_mode'] == 'background' else 'somente defeitos'}\n"
                 f"Resultado: {result['output_dir']}\n\n"
-                "Frames sem defeitos pequenos detectados permanecem intactos.",
+                + (
+                    "Somente a área marcada como fundo estático foi reconstruída."
+                    if result["application_mode"] == "background"
+                    else "Frames sem defeitos pequenos detectados permanecem intactos."
+                ),
             )
 
         self._start_ui_job(
@@ -7305,6 +7332,9 @@ class EditorScreen:
             return
         self._activate_operation_scope(scope)
         start, end = scope.start, scope.end
+        self._show_clean_plate_build_dialog(start, end)
+
+    def _show_clean_plate_build_dialog(self, start, end):
         if end - start < 2:
             messagebox.showerror(
                 "Placa limpa", "O intervalo precisa conter pelo menos três frames."
@@ -7322,17 +7352,26 @@ class EditorScreen:
             self.root,
             start + 1,
             end + 1,
+            (info["index"] + 1) if info else (start + 1),
             has_selection,
-            lambda apply_after, use_selection: self._start_clean_plate(
+            lambda apply_after, use_selection, base_mode, application_mode: self._start_clean_plate(
                 start,
                 end,
                 apply_after,
                 use_selection,
+                base_mode,
+                application_mode,
             ),
         )
 
     def _start_clean_plate(
-        self, start, end, apply_after_build, use_current_selection=False
+        self,
+        start,
+        end,
+        apply_after_build,
+        use_current_selection=False,
+        base_mode="first",
+        application_mode="background",
     ):
         frames = list(self.frame_manager.frames)
         frames_dir = self.frame_manager.frames_dir
@@ -7351,6 +7390,9 @@ class EditorScreen:
         sample_indices = sorted(
             set(np.linspace(start, end, min(15, end - start + 1), dtype=int).tolist())
         )
+        current_index = current_info["index"] if current_info else start
+        base_index = start if base_mode == "first" else current_index
+        base_index = max(start, min(end, base_index))
         source_name = self._camera_segment_source()
         plate_id = make_clean_plate_id(
             source_name,
@@ -7375,8 +7417,17 @@ class EditorScreen:
                     (position + 1) * 25.0 / len(sample_indices),
                     f"Lendo amostras estáticas — {position + 1}/{len(sample_indices)}",
                 )
+            base_image = None
+            if base_mode in {"first", "current"}:
+                base_image = cv2.imread(source_paths[base_index], cv2.IMREAD_COLOR)
+                if base_image is None:
+                    raise RuntimeError(
+                        f"Não foi possível ler o frame-base {base_index + 1}"
+                    )
             plate, static_mask, diagnostics = build_clean_plate(
                 samples,
+                base_frame=base_image,
+                base_strategy="sharpest" if base_mode == "sharpest" else "selected",
                 progress_callback=lambda value: context.report(
                     25.0 + value * 0.35,
                     f"Separando fundo e movimento — {value:.0f}%",
@@ -7408,6 +7459,9 @@ class EditorScreen:
                         "source": source_name,
                         "start": start,
                         "end": end,
+                        "base_mode": base_mode,
+                        "base_frame": base_index if base_image is not None else None,
+                        "application_mode": application_mode,
                         "diagnostics": diagnostics,
                         "selection_region": application_region is not None,
                     },
@@ -7428,14 +7482,19 @@ class EditorScreen:
                     )
                     if current is None:
                         continue
-                    defect_mask = detect_transient_defects(previous, current, following)
-                    for extra_path in (
-                        self._mask_path_for_frame(os.path.join(frames_dir, frames[frame_index])),
-                        self._auto_mask_path_for_frame(os.path.join(frames_dir, frames[frame_index])),
-                    ):
-                        extra = cv2.imread(extra_path, cv2.IMREAD_GRAYSCALE) if os.path.exists(extra_path) else None
-                        if extra is not None:
-                            defect_mask = cv2.bitwise_or(defect_mask, extra)
+                    if application_mode == "background":
+                        defect_mask = np.full(current.shape[:2], 255, dtype=np.uint8)
+                    else:
+                        defect_mask = detect_transient_defects(
+                            previous, current, following
+                        )
+                        for extra_path in (
+                            self._mask_path_for_frame(os.path.join(frames_dir, frames[frame_index])),
+                            self._auto_mask_path_for_frame(os.path.join(frames_dir, frames[frame_index])),
+                        ):
+                            extra = cv2.imread(extra_path, cv2.IMREAD_GRAYSCALE) if os.path.exists(extra_path) else None
+                            if extra is not None:
+                                defect_mask = cv2.bitwise_or(defect_mask, extra)
                     frame_selection = None
                     if application_region is None:
                         frame_selection = self._load_selection_cv(
@@ -7448,7 +7507,11 @@ class EditorScreen:
                         application_region=application_region,
                     )
                     restored, frame_diagnostics = apply_clean_plate(
-                        current, plate, static_mask, defect_mask
+                        current,
+                        plate,
+                        static_mask,
+                        defect_mask,
+                        application_mode=application_mode,
                     )
                     if frame_diagnostics["replaced_pixels"]:
                         output = os.path.join(
@@ -7467,6 +7530,7 @@ class EditorScreen:
                                     "plate_id": plate_id,
                                     "start": start,
                                     "end": end,
+                                    "application_mode": application_mode,
                                     "foreground_protection": True,
                                 },
                                 artifacts=chunk_artifacts,
@@ -7483,6 +7547,7 @@ class EditorScreen:
                 "plate_path": plate_path,
                 "total": end - start + 1,
                 "output_dir": clean_plate_output_dir,
+                "application_mode": application_mode,
             }
 
         def clean_plate_complete(result):
@@ -7500,6 +7565,9 @@ class EditorScreen:
                     "Placa limpa concluída",
                     f"Fundo estável: {diagnostics['static_ratio'] * 100:.1f}%\n"
                     f"Frames modificados: {result['modified']}/{result['total']}\n"
+                    f"Nitidez da placa: {diagnostics['plate_sharpness']:.1f} "
+                    f"(mediana antiga: {diagnostics['median_sharpness']:.1f})\n"
+                    f"Aplicação: {'fundo estático completo' if result['application_mode'] == 'background' else 'somente defeitos'}\n"
                     f"Placa salva em:\n{result['plate_path']}\n\n"
                     "Os demais frames não tinham defeitos pequenos considerados seguros. "
                     "Pessoas e movimentos grandes foram protegidos.",
