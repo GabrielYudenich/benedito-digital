@@ -166,7 +166,11 @@ def apply_clean_plate(
     defect_mask = cv2.resize(
         defect_mask, (width, height), interpolation=cv2.INTER_NEAREST
     )
-    plate, plate_motion, warp = _align_translation(plate, current)
+    plate, plate_motion, warp, alignment_model = align_plate_to_frame(
+        plate,
+        current,
+        static_mask,
+    )
     if warp is not None:
         static_mask = cv2.warpAffine(
             static_mask,
@@ -176,6 +180,13 @@ def apply_clean_plate(
             borderMode=cv2.BORDER_CONSTANT,
             borderValue=0,
         )
+    plate, local_motion, local_improvement = refine_local_plate_alignment(
+        plate,
+        current,
+        static_mask,
+    )
+    if local_motion > 0:
+        alignment_model = f"{alignment_model}+local_flow"
     if application_mode == "background":
         plate = _match_plate_tone(plate, current, static_mask)
     difference = cv2.absdiff(current, plate)
@@ -224,6 +235,9 @@ def apply_clean_plate(
         "protected_foreground_pixels": int(np.count_nonzero(foreground)),
         "dynamic_foreground_pixels": int(np.count_nonzero(dynamic_foreground)),
         "plate_alignment_motion": plate_motion,
+        "plate_alignment_model": alignment_model,
+        "plate_local_alignment_motion": local_motion,
+        "plate_local_alignment_improvement": local_improvement,
         "application_mode": application_mode,
     }
     return np.clip(output, 0, 255).astype(np.uint8), diagnostics
@@ -289,6 +303,146 @@ def restrict_defect_mask(
         interpolation=cv2.INTER_NEAREST,
     )
     return cv2.bitwise_and(defect_mask, region)
+
+
+def align_plate_to_frame(
+    plate: np.ndarray,
+    current: np.ndarray,
+    static_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, float, np.ndarray | None, str]:
+    """Align a plate with translation, rotation, scale and conservative shear."""
+    height, width = current.shape[:2]
+    plate = cv2.resize(plate, (width, height), interpolation=cv2.INTER_CUBIC)
+    scale = min(1.0, 640.0 / max(width, height))
+    small_size = (max(32, int(width * scale)), max(32, int(height * scale)))
+    template = _alignment_gray(current, small_size)
+    candidate = _alignment_gray(plate, small_size)
+    input_mask = None
+    if static_mask is not None:
+        input_mask = cv2.resize(
+            static_mask,
+            small_size,
+            interpolation=cv2.INTER_NEAREST,
+        )
+        input_mask = cv2.erode(input_mask, np.ones((5, 5), np.uint8), iterations=1)
+        if np.count_nonzero(input_mask) < input_mask.size * 0.08:
+            input_mask = None
+    warp = np.eye(2, 3, dtype=np.float32)
+    try:
+        cv2.findTransformECC(
+            template,
+            candidate,
+            warp,
+            cv2.MOTION_AFFINE,
+            (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 80, 1e-6),
+            inputMask=input_mask,
+            gaussFiltSize=5,
+        )
+        warp[0, 2] /= scale
+        warp[1, 2] /= scale
+        if not _affine_alignment_is_safe(warp, width, height):
+            raise ValueError("Unsafe affine alignment")
+        aligned = cv2.warpAffine(
+            plate,
+            warp,
+            (width, height),
+            flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP,
+            borderMode=cv2.BORDER_REFLECT,
+        )
+        motion = float(np.hypot(warp[0, 2], warp[1, 2]))
+        return aligned, motion, warp, "precise_affine"
+    except (cv2.error, ValueError):
+        aligned, motion, fallback_warp = _align_translation(plate, current)
+        return aligned, motion, fallback_warp, "translation_fallback"
+
+
+def refine_local_plate_alignment(
+    plate: np.ndarray,
+    current: np.ndarray,
+    static_mask: np.ndarray,
+    *,
+    maximum_displacement: float = 2.5,
+) -> tuple[np.ndarray, float, float]:
+    """Correct small residual gate weave without moving protected foreground."""
+    height, width = current.shape[:2]
+    valid = static_mask > 0
+    if np.count_nonzero(valid) < static_mask.size * 0.08:
+        return plate, 0.0, 0.0
+    scale = min(1.0, 480.0 / max(width, height))
+    small_size = (max(32, int(width * scale)), max(32, int(height * scale)))
+    plate_gray = cv2.resize(
+        cv2.cvtColor(plate, cv2.COLOR_BGR2GRAY),
+        small_size,
+        interpolation=cv2.INTER_AREA,
+    )
+    current_gray = cv2.resize(
+        cv2.cvtColor(current, cv2.COLOR_BGR2GRAY),
+        small_size,
+        interpolation=cv2.INTER_AREA,
+    )
+    small_mask = cv2.resize(
+        static_mask,
+        small_size,
+        interpolation=cv2.INTER_NEAREST,
+    ) > 0
+    plate_gray[~small_mask] = 127
+    current_gray[~small_mask] = 127
+    flow = cv2.calcOpticalFlowFarneback(
+        plate_gray,
+        current_gray,
+        None,
+        0.5,
+        4,
+        21,
+        4,
+        5,
+        1.1,
+        0,
+    )
+    flow = cv2.GaussianBlur(flow, (0, 0), 2.0)
+    flow[~small_mask] = 0
+    maximum_small = max(0.25, float(maximum_displacement) * scale)
+    magnitude = np.linalg.norm(flow, axis=2)
+    limiter = np.minimum(1.0, maximum_small / np.maximum(magnitude, 1e-6))
+    flow *= limiter[..., None]
+    flow = cv2.resize(flow, (width, height), interpolation=cv2.INTER_CUBIC) / scale
+    y_coordinates, x_coordinates = np.mgrid[0:height, 0:width].astype(np.float32)
+    refined = cv2.remap(
+        plate,
+        x_coordinates - flow[..., 0],
+        y_coordinates - flow[..., 1],
+        cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REFLECT,
+    )
+    before = float(np.mean(cv2.absdiff(plate, current)[valid]))
+    after = float(np.mean(cv2.absdiff(refined, current)[valid]))
+    if after >= before:
+        return plate, 0.0, 0.0
+    full_magnitude = np.linalg.norm(flow, axis=2)
+    motion = float(np.percentile(full_magnitude[valid], 90))
+    improvement = (before - after) / max(1e-6, before)
+    return refined, motion, float(improvement)
+
+
+def _alignment_gray(image: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, size, interpolation=cv2.INTER_AREA)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    return cv2.normalize(gray, None, 0.0, 1.0, cv2.NORM_MINMAX).astype(np.float32)
+
+
+def _affine_alignment_is_safe(warp: np.ndarray, width: int, height: int) -> bool:
+    linear = warp[:, :2].astype(np.float64)
+    singular_values = np.linalg.svd(linear, compute_uv=False)
+    determinant = float(np.linalg.det(linear))
+    translation = float(np.hypot(warp[0, 2], warp[1, 2]))
+    return bool(
+        np.all(np.isfinite(warp))
+        and determinant > 0
+        and np.min(singular_values) >= 0.92
+        and np.max(singular_values) <= 1.08
+        and translation <= max(width, height) * 0.12
+    )
 
 
 def _align_translation(frame: np.ndarray, reference: np.ndarray):

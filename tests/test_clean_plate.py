@@ -11,11 +11,13 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from core.clean_plate import (
+    align_plate_to_frame,
     apply_clean_plate,
     build_clean_plate,
     compose_plate_layer,
     detect_transient_defects,
     make_transparent_plate,
+    refine_local_plate_alignment,
     restrict_defect_mask,
 )
 from gui.dialogs.clean_plate_manager_dialog import CleanPlateEditorDialog
@@ -137,6 +139,58 @@ def test_background_application_replaces_static_area_but_protects_subject():
     assert restored_detail > current_detail * 1.2
     assert abs(float(restored[:35].mean()) - float(current[:35].mean())) < 3
     assert np.max(cv2.absdiff(restored[52:102, 68:108], current[52:102, 68:108])) <= 5
+
+
+def test_precise_plate_alignment_corrects_rotation_scale_and_translation():
+    plate = _background()
+    center = (plate.shape[1] / 2, plate.shape[0] / 2)
+    transform = cv2.getRotationMatrix2D(center, 1.8, 1.025)
+    transform[:, 2] += (3.0, -2.0)
+    current = cv2.warpAffine(
+        plate,
+        transform,
+        (plate.shape[1], plate.shape[0]),
+        borderMode=cv2.BORDER_REFLECT,
+    )
+    static_mask = np.full(plate.shape[:2], 255, dtype=np.uint8)
+
+    aligned, _motion, _warp, model = align_plate_to_frame(
+        plate,
+        current,
+        static_mask,
+    )
+
+    before = float(np.mean(cv2.absdiff(plate, current)))
+    after = float(np.mean(cv2.absdiff(aligned, current)))
+    assert model == "precise_affine"
+    assert after < before * 0.35
+
+
+def test_local_plate_alignment_corrects_small_residual_warp():
+    plate = _background()
+    height, width = plate.shape[:2]
+    y_coordinates, x_coordinates = np.mgrid[0:height, 0:width].astype(np.float32)
+    displacement = 1.8 * np.sin(y_coordinates / 14.0).astype(np.float32)
+    current = cv2.remap(
+        plate,
+        x_coordinates - displacement,
+        y_coordinates,
+        cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REFLECT,
+    )
+    static_mask = np.full(plate.shape[:2], 255, dtype=np.uint8)
+
+    refined, motion, improvement = refine_local_plate_alignment(
+        plate,
+        current,
+        static_mask,
+    )
+
+    before = float(np.mean(cv2.absdiff(plate, current)))
+    after = float(np.mean(cv2.absdiff(refined, current)))
+    assert motion > 0
+    assert improvement > 0.1
+    assert after < before * 0.8
 
 
 def test_transparent_plate_uses_static_mask_as_alpha():

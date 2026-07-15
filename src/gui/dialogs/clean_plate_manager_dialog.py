@@ -305,7 +305,8 @@ class CleanPlateApplicationDialog:
             visible,
             text=(
                 "Usa a placa em toda a área estática e protege pessoas ou objetos em "
-                "movimento. É a opção correta para realmente trocar o fundo do trecho."
+                "movimento. O alinhamento preciso corrige translação, rotação e pequenas "
+                "diferenças de escala em cada frame."
             ),
             wraplength=560,
         ).pack(anchor=tk.W, padx=(22, 0), pady=(5, 0))

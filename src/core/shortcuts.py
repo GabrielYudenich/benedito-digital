@@ -36,6 +36,7 @@ SHORTCUT_DEFINITIONS = (
     ShortcutDefinition("positions", "Posicionamentos de câmera", "Ctrl+Alt+C"),
     ShortcutDefinition("clean_plate", "Criar placa limpa", "Ctrl+Alt+P"),
     ShortcutDefinition("stabilize", "Estabilizar trecho ativo", "Ctrl+Alt+S"),
+    ShortcutDefinition("tone_normalize", "Normalizar luz e contraste", "Ctrl+Alt+N"),
     ShortcutDefinition("preview", "Pré-renderizar trecho ativo", "Ctrl+Alt+V"),
     ShortcutDefinition("render", "Renderizar resultado final", "Ctrl+Alt+R"),
     ShortcutDefinition("timeline", "Timeline multipista", "Ctrl+Shift+T"),

@@ -18,6 +18,9 @@ As mudanças relevantes deste projeto serão registradas aqui. O formato segue
 - placa e pincel de revelação usam estabilização/original limpos, nunca um `restored` legado contaminado;
 - correções reativam com segurança somente o frame atual quando a metadata da layer está ausente;
 - prévia do pincel mostra o resultado real por padrão, com máscara amarela opcional;
+- alinhamento preciso da placa por frame com translação, rotação, escala e fallback seguro;
+- normalização temporal não destrutiva de luz e contraste por posicionamento, com referência
+  mediana, intensidade configurável, progresso e atalho personalizável;
 - workspace versionado com branches, histórico, merge visual e originais imutáveis;
 - processamento retomável por chunks, fila em segundo plano, progresso e cancelamento;
 - seleções, clone, healing, máscaras, filtros por intervalo e análise de danos;

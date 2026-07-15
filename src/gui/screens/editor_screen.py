@@ -50,6 +50,12 @@ from core.clean_plate import (
     restrict_defect_mask,
 )
 from core.clean_plate_library import discover_clean_plates, make_clean_plate_id
+from core.tone_normalization import (
+    measure_luma_profile,
+    median_luma_profile,
+    normalize_frame_luma,
+    smooth_luma_profiles,
+)
 from gui.controllers.frame_retouch_controller import FrameRetouchController
 from gui.controllers.film_registration_controller import FilmRegistrationController
 from gui.controllers.collaboration_controller import CollaborationController
@@ -77,6 +83,7 @@ from gui.dialogs.progress_dialog import TaskProgressDialog
 from gui.dialogs.proxy_dialog import ProxyDialog
 from gui.dialogs.restoration_workflow_dialog import RestorationWorkflowDialog, VHSProcessingDialog
 from gui.dialogs.shortcut_settings_dialog import ShortcutSettingsDialog
+from gui.dialogs.tone_normalization_dialog import ToneNormalizationDialog
 from gui.dialogs.workflow_assistant import WorkflowAssistant
 from gui.mousewheel import scroll_canvas_if_within
 from gui.frame_view import anchored_zoom_pan, clamp_view_pan, filmstrip_window_indices
@@ -135,6 +142,9 @@ class EditorScreen:
         self.restored_dir = os.path.join(self.project_manager.current_project_path, "restored")
         self.manual_stab_dir = os.path.join(self.project_manager.current_project_path, "stabilized_manual")
         self.auto_stab_dir = os.path.join(self.project_manager.current_project_path, "stabilized_auto")
+        self.tone_normalized_dir = os.path.join(
+            self.project_manager.current_project_path, "tone_normalized"
+        )
         self.upscaled_dir = os.path.join(self.project_manager.current_project_path, "upscaled")
         self.view_mode = "original"
         repo_root = str(resource_root())
@@ -459,6 +469,11 @@ class EditorScreen:
             command=self.apply_auto_stabilization_range,
             accelerator=self.shortcut_preferences.get("stabilize"),
         )
+        restoration_menu.add_command(
+            label="Normalizar luz e contraste do trecho...",
+            command=self.normalize_tone_range,
+            accelerator=self.shortcut_preferences.get("tone_normalize"),
+        )
         restoration_menu.add_separator()
         restoration_menu.add_command(
             label="Pré-renderizar trecho ativo...",
@@ -698,6 +713,7 @@ class EditorScreen:
         self.restored_dir = os.path.join(worktree, "restored")
         self.manual_stab_dir = os.path.join(worktree, "stabilized_manual")
         self.auto_stab_dir = os.path.join(worktree, "stabilized_auto")
+        self.tone_normalized_dir = os.path.join(worktree, "tone_normalized")
         self.upscaled_dir = os.path.join(worktree, "upscaled")
         self.masks_dir = os.path.join(worktree, "masks")
         self.auto_masks_dir = os.path.join(worktree, "masks_auto")
@@ -800,6 +816,7 @@ class EditorScreen:
             "positions": self.open_camera_segments_dialog,
             "clean_plate": self.open_clean_plate_dialog,
             "stabilize": self.apply_auto_stabilization_range,
+            "tone_normalize": self.normalize_tone_range,
             "preview": self.preview_from_frames_action,
             "render": self.render_restored_video_action,
             "timeline": self.timeline_controller.open_dialog,
@@ -4315,6 +4332,10 @@ class EditorScreen:
             up_path = os.path.join(self.upscaled_dir, info['filename'])
             if os.path.exists(up_path):
                 restored_path = up_path
+        tone_dir = getattr(self, "tone_normalized_dir", "")
+        tone_path = os.path.join(tone_dir, info['filename']) if tone_dir else ""
+        if tone_path and os.path.exists(tone_path):
+            restored_path = tone_path
 
         base_img = self._load_image(original_path)
         restored_img = self._load_image(restored_path) if os.path.exists(restored_path) else None
@@ -6122,6 +6143,9 @@ class EditorScreen:
         self._schedule_filmstrip_update(20)
 
     def _review_result_directory(self):
+        tone_dir = getattr(self, "tone_normalized_dir", "")
+        if tone_dir and os.path.isdir(tone_dir):
+            return tone_dir
         if (
             getattr(self, "view_upscale_var", None) is not None
             and self.view_upscale_var.get()
@@ -6172,10 +6196,9 @@ class EditorScreen:
             self._review_prefetch_pending.add(key)
         filename = self.frame_manager.frames[frame_index]
         original_path = os.path.join(self.frame_manager.frames_dir, filename)
-        result_path = os.path.join(self._review_result_dir, filename)
+        result_path = self._render_source_path(frame_index)
         if not os.path.isfile(result_path):
-            fallback = os.path.join(self.restored_dir, filename)
-            result_path = fallback if os.path.isfile(fallback) else original_path
+            result_path = original_path
         self._review_prefetch_queue.put(
             (
                 int(priority),
@@ -6988,6 +7011,7 @@ class EditorScreen:
             self._apply_camera_segment,
             self._stabilize_camera_segment,
             self._clean_plate_camera_segment,
+            self._normalize_camera_segment,
             self._preview_camera_segment,
             self._reset_camera_segment,
         )
@@ -7102,6 +7126,10 @@ class EditorScreen:
     def _clean_plate_camera_segment(self, segment):
         self._apply_camera_segment(segment)
         self.open_clean_plate_dialog(suggested_segment=segment)
+
+    def _normalize_camera_segment(self, segment):
+        self._apply_camera_segment(segment)
+        self.normalize_tone_range(preview_segment=segment)
 
     def _preview_camera_segment(self, segment):
         self._apply_camera_segment(segment)
@@ -7333,6 +7361,7 @@ class EditorScreen:
         if layer_invalidated:
             os.remove(layer_paths["metadata"])
         self._clean_plate_layers_cache = None
+        self._clear_tone_normalization_outputs(record.start, record.end)
         if self.workspace:
             self.workspace.commit_operation(
                 "clean_plate.edit",
@@ -7492,6 +7521,7 @@ class EditorScreen:
         output_dir = layer_paths["composite"]
 
         def reapply_task(context):
+            self._clear_tone_normalization_outputs(start, end)
             self._write_clean_plate_layer_metadata(
                 record.plate_id,
                 start,
@@ -7760,6 +7790,8 @@ class EditorScreen:
         application_region_path = os.path.join(plate_dir, "application_region.png")
 
         def clean_plate_task(context):
+            if apply_after_build:
+                self._clear_tone_normalization_outputs(start, end)
             samples = []
             for position, frame_index in enumerate(sample_indices):
                 context.check_cancelled()
@@ -8314,6 +8346,10 @@ class EditorScreen:
         manual = os.path.join(self.manual_stab_dir, frame_name)
         automatic = os.path.join(self.auto_stab_dir, frame_name)
         upscaled = os.path.join(self.upscaled_dir, frame_name)
+        tone_dir = getattr(self, "tone_normalized_dir", "")
+        tone_normalized = os.path.join(tone_dir, frame_name) if tone_dir else ""
+        if tone_normalized and os.path.exists(tone_normalized):
+            return tone_normalized
         if (
             getattr(self, "view_upscale_var", None) is not None
             and self.view_upscale_var.get()
@@ -8327,6 +8363,45 @@ class EditorScreen:
         if os.path.exists(restored):
             return restored
         return original
+
+    def _tone_normalization_source_path(self, index):
+        frames = self.frame_manager.frames
+        index = max(0, min(index, len(frames) - 1))
+        frame_name = frames[index]
+        clean_plate = self._clean_plate_layer_frame_path(index)
+        if clean_plate:
+            return clean_plate
+        upscaled = os.path.join(self.upscaled_dir, frame_name)
+        if (
+            getattr(self, "view_upscale_var", None) is not None
+            and self.view_upscale_var.get()
+            and os.path.exists(upscaled)
+        ):
+            return upscaled
+        manual = os.path.join(self.manual_stab_dir, frame_name)
+        automatic = os.path.join(self.auto_stab_dir, frame_name)
+        restored = os.path.join(self.restored_dir, frame_name)
+        original = os.path.join(self.frame_manager.frames_dir, frame_name)
+        if self.use_manual_stab_var.get() and os.path.exists(manual):
+            return manual
+        if self.use_auto_stab_var.get() and os.path.exists(automatic):
+            return automatic
+        if os.path.exists(restored):
+            return restored
+        return original
+
+    def _clear_tone_normalization_outputs(self, start, end):
+        tone_dir = getattr(self, "tone_normalized_dir", "")
+        if not tone_dir or not self.frame_manager:
+            return 0
+        frames = self.frame_manager.frames
+        removed = 0
+        for frame_index in range(max(0, start), min(end, len(frames) - 1) + 1):
+            path = os.path.join(tone_dir, frames[frame_index])
+            if os.path.isfile(path):
+                os.remove(path)
+                removed += 1
+        return removed
 
     def restore_current_frame_action(self):
         if not self.frame_manager or not self.frame_manager.frames:
@@ -8632,6 +8707,7 @@ class EditorScreen:
         frame_indices = list(range(max(0, start), min(end, len(frames) - 1) + 1))
 
         def stabilization_task(context):
+            self._clear_tone_normalization_outputs(start, end)
             os.makedirs(self.manual_stab_dir, exist_ok=True)
             done = 0
             for position, frame_index in enumerate(frame_indices):
@@ -8708,6 +8784,7 @@ class EditorScreen:
         frame_indices = list(range(max(0, start), min(end, len(frames) - 1) + 1))
 
         def stabilization_task(context):
+            self._clear_tone_normalization_outputs(start, end)
             os.makedirs(self.auto_stab_dir, exist_ok=True)
             temp_in = os.path.join(self.video_renderer.temp_dir, "stab_in")
             temp_out = os.path.join(self.video_renderer.temp_dir, "stab_out")
@@ -8777,6 +8854,129 @@ class EditorScreen:
             f"Estabilização — {scope.label}",
             stabilization_task,
             stabilization_complete,
+        )
+
+    def normalize_tone_range(self, preview_segment=None):
+        if not self.frame_manager or not self.frame_manager.frames:
+            messagebox.showwarning("Aviso", "Nenhum frame carregado.")
+            return
+        scope = self._choose_processing_scope(
+            "Normalização de luz e contraste",
+            suggested_segment=preview_segment,
+        )
+        if scope is None:
+            return
+        self._activate_operation_scope(scope)
+        current = self.frame_manager.current_frame_index
+        settings = ToneNormalizationDialog(
+            self.root,
+            scope.start + 1,
+            scope.end + 1,
+            current + 1,
+        ).show()
+        if settings is None:
+            return
+        frames = list(self.frame_manager.frames)
+        frame_indices = list(range(scope.start, scope.end + 1))
+        source_paths = {
+            frame_index: self._tone_normalization_source_path(frame_index)
+            for frame_index in frame_indices
+        }
+
+        def normalization_task(context):
+            profiles = []
+            for position, frame_index in enumerate(frame_indices):
+                context.check_cancelled()
+                image = cv2.imread(source_paths[frame_index], cv2.IMREAD_COLOR)
+                if image is None:
+                    raise RuntimeError(
+                        f"Não foi possível ler o frame {frame_index + 1}"
+                    )
+                profiles.append(measure_luma_profile(image))
+                context.report(
+                    (position + 1) * 35.0 / max(1, len(frame_indices)),
+                    f"Medindo luz e contraste — {position + 1}/{len(frame_indices)}",
+                )
+            smoothed = smooth_luma_profiles(profiles, radius=4)
+            if settings.reference == "current" and scope.start <= current <= scope.end:
+                target = profiles[current - scope.start]
+            elif settings.reference == "first":
+                target = profiles[0]
+            else:
+                target = median_luma_profile(profiles)
+            os.makedirs(self.tone_normalized_dir, exist_ok=True)
+            artifacts = {}
+            for position, (frame_index, source_profile) in enumerate(
+                zip(frame_indices, smoothed)
+            ):
+                context.check_cancelled()
+                image = cv2.imread(source_paths[frame_index], cv2.IMREAD_COLOR)
+                if image is None:
+                    raise RuntimeError(
+                        f"NÃ£o foi possÃ­vel reler o frame {frame_index + 1}"
+                    )
+                normalized = normalize_frame_luma(
+                    image,
+                    target,
+                    source=source_profile,
+                    strength=settings.strength,
+                )
+                output = os.path.join(
+                    self.tone_normalized_dir,
+                    frames[frame_index],
+                )
+                if not cv2.imwrite(output, normalized):
+                    raise RuntimeError(f"Não foi possível salvar {output}")
+                artifacts[f"frame_{frame_index:09d}"] = output
+                if len(artifacts) >= 24 or position == len(frame_indices) - 1:
+                    if self.workspace:
+                        self.workspace.commit_operation(
+                            "tone.normalize",
+                            payload={
+                                "start": scope.start,
+                                "end": scope.end,
+                                "scope": scope.kind,
+                                "reference": settings.reference,
+                                "strength": settings.strength,
+                                "target": {
+                                    "low": target.low,
+                                    "middle": target.middle,
+                                    "high": target.high,
+                                },
+                            },
+                            artifacts=artifacts,
+                        )
+                    artifacts = {}
+                context.report(
+                    35.0 + (position + 1) * 65.0 / max(1, len(frame_indices)),
+                    f"Normalizando frames — {position + 1}/{len(frame_indices)}",
+                )
+            return {
+                "count": len(frame_indices),
+                "target": target,
+                "label": scope.label,
+            }
+
+        def normalization_complete(result):
+            self.view_mode = "restored"
+            self.view_mode_label.config(text="Visualização: restaurado")
+            self.show_current_frame()
+            self.status_var.set(
+                f"Luz e contraste normalizados em {result['count']} frames"
+            )
+            messagebox.showinfo(
+                "Normalização concluída",
+                f"{result['label']} foi uniformizado em {result['count']} frames.\n\n"
+                f"Referência tonal: sombras {result['target'].low:.0f}, "
+                f"meios-tons {result['target'].middle:.0f}, "
+                f"altas luzes {result['target'].high:.0f}.\n\n"
+                "O resultado está em uma camada derivada; os frames anteriores foram preservados.",
+            )
+
+        self._start_ui_job(
+            f"Normalização tonal — {scope.label}",
+            normalization_task,
+            normalization_complete,
         )
 
     def _ensure_upscale_model(self):
@@ -9503,6 +9703,10 @@ class EditorScreen:
     def _render_source_path(self, frame_index, preferred_dir=None):
         filename = self.frame_manager.frames[frame_index]
         candidates = []
+        tone_dir = getattr(self, "tone_normalized_dir", "")
+        tone_path = os.path.join(tone_dir, filename) if tone_dir else ""
+        if tone_path and os.path.isfile(tone_path):
+            candidates.append(tone_path)
         clean_plate_layer_path = self._clean_plate_layer_frame_path(frame_index)
         if clean_plate_layer_path:
             candidates.append(clean_plate_layer_path)

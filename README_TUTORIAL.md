@@ -127,6 +127,12 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
     partes da revelação e salve a correção.
 20. Placas criadas antes deste fluxo aparecem como antigas no gerenciador. Use `Recriar placa`
     para repetir exatamente o intervalo com a nova base nítida e a máscara suavizada.
+21. Se partes do cenário ficarem levemente deslocadas, apenas use `Aplicar placa limpa` novamente.
+    O alinhamento preciso ajusta translação, rotação e pequenas diferenças de escala em cada frame.
+22. Para uniformizar brilho e contraste, escolha o posicionamento e use `Normalizar luz/contraste`,
+    ou abra `Restauração > Normalizar luz e contraste do trecho`. A referência `Mediana do
+    posicionamento` com intensidade de `85%` é o ponto inicial recomendado. O resultado é uma
+    camada derivada e pode ser removido pelo reset do posicionamento.
 
 **7. Restaurar**
 1. Abra `Propriedades > Abrir propriedades avançadas` para ajustar o `Preset Global` e

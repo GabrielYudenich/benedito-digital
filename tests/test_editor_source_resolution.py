@@ -63,6 +63,41 @@ def test_source_frame_prefers_active_auto_stabilization(tmp_path):
     assert screen._get_source_frame_path(0) == str(automatic_dir / frame_name)
 
 
+def test_source_frame_prefers_tone_normalization_layer(tmp_path):
+    original_dir = tmp_path / "originals"
+    restored_dir = tmp_path / "restored"
+    manual_dir = tmp_path / "manual"
+    automatic_dir = tmp_path / "automatic"
+    upscaled_dir = tmp_path / "upscaled"
+    tone_dir = tmp_path / "tone"
+    for directory in (
+        original_dir,
+        restored_dir,
+        manual_dir,
+        automatic_dir,
+        upscaled_dir,
+        tone_dir,
+    ):
+        directory.mkdir()
+    frame_name = "frame_000001.png"
+    (original_dir / frame_name).write_bytes(b"original")
+    (automatic_dir / frame_name).write_bytes(b"stabilized")
+    (tone_dir / frame_name).write_bytes(b"normalized")
+
+    screen = object.__new__(EditorScreen)
+    screen.frame_manager = FakeFrameManager(original_dir)
+    screen.restored_dir = str(restored_dir)
+    screen.manual_stab_dir = str(manual_dir)
+    screen.auto_stab_dir = str(automatic_dir)
+    screen.upscaled_dir = str(upscaled_dir)
+    screen.tone_normalized_dir = str(tone_dir)
+    screen.view_upscale_var = FakeVariable(False)
+    screen.use_manual_stab_var = FakeVariable(False)
+    screen.use_auto_stab_var = FakeVariable(True)
+
+    assert screen._get_source_frame_path(0) == str(tone_dir / frame_name)
+
+
 def test_clean_plate_base_ignores_contaminated_restored_frame(tmp_path):
     original_dir = tmp_path / "originals"
     restored_dir = tmp_path / "restored"

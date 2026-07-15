@@ -87,6 +87,7 @@ def test_frame_reset_commits_artifacts_and_removes_branch_files(monkeypatch, tmp
     for attribute in (
         "manual_stab_dir",
         "auto_stab_dir",
+        "tone_normalized_dir",
         "upscaled_dir",
         "auto_masks_dir",
         "selections_dir",
@@ -97,6 +98,8 @@ def test_frame_reset_commits_artifacts_and_removes_branch_files(monkeypatch, tmp
         derived_directories[attribute] = directory
     automatic = derived_directories["auto_stab_dir"] / frame.name
     automatic.write_bytes(b"stabilized")
+    normalized = derived_directories["tone_normalized_dir"] / frame.name
+    normalized.write_bytes(b"normalized")
     layer_composite = (
         derived_directories["clean_plate_layers_dir"]
         / "plate-a"
@@ -114,6 +117,7 @@ def test_frame_reset_commits_artifacts_and_removes_branch_files(monkeypatch, tmp
     editor.restored_dir = str(restored_dir)
     editor.manual_stab_dir = str(derived_directories["manual_stab_dir"])
     editor.auto_stab_dir = str(derived_directories["auto_stab_dir"])
+    editor.tone_normalized_dir = str(derived_directories["tone_normalized_dir"])
     editor.upscaled_dir = str(derived_directories["upscaled_dir"])
     editor.auto_masks_dir = str(derived_directories["auto_masks_dir"])
     editor.selections_dir = str(derived_directories["selections_dir"])
@@ -149,6 +153,7 @@ def test_frame_reset_commits_artifacts_and_removes_branch_files(monkeypatch, tmp
     assert not mask.exists()
     assert not restored.exists()
     assert not automatic.exists()
+    assert not normalized.exists()
     assert not layer_composite.exists()
     assert frame.read_bytes() == b"original"
     assert editor.view_mode == "original"
@@ -171,6 +176,7 @@ def test_total_reset_removes_only_derived_branch_files(monkeypatch, tmp_path):
         "restored_dir": "restored",
         "manual_stab_dir": "stabilized_manual",
         "auto_stab_dir": "stabilized_auto",
+        "tone_normalized_dir": "tone_normalized",
         "upscaled_dir": "upscaled",
         "masks_dir": "masks",
         "auto_masks_dir": "masks_auto",
@@ -235,7 +241,7 @@ def test_total_reset_removes_only_derived_branch_files(monkeypatch, tmp_path):
         assert list(Path(getattr(editor, attribute)).iterdir()) == []
     assert list((worktree / ".jobs").iterdir()) == []
     assert editor.workspace.operations[-1][0] == "project.reset_results"
-    assert editor.workspace.operations[-1][1]["payload"]["removed_files"] == 9
+    assert editor.workspace.operations[-1][1]["payload"]["removed_files"] == 10
     assert editor.view_mode == "original"
     assert editor.shown == 1
 
@@ -261,6 +267,7 @@ def test_segment_reset_preserves_results_outside_selected_position(monkeypatch, 
         "restored_dir": "restored",
         "manual_stab_dir": "stabilized_manual",
         "auto_stab_dir": "stabilized_auto",
+        "tone_normalized_dir": "tone_normalized",
         "upscaled_dir": "upscaled",
         "masks_dir": "masks",
         "auto_masks_dir": "masks_auto",
@@ -275,6 +282,7 @@ def test_segment_reset_preserves_results_outside_selected_position(monkeypatch, 
             Path(editor.restored_dir),
             Path(editor.manual_stab_dir),
             Path(editor.auto_stab_dir),
+            Path(editor.tone_normalized_dir),
             Path(editor.upscaled_dir),
         ):
             (directory / frame_name).write_bytes(b"derived")

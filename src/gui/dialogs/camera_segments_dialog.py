@@ -16,6 +16,7 @@ class CameraSegmentsDialog:
         apply_callback,
         stabilize_callback,
         clean_plate_callback,
+        normalize_callback,
         preview_callback,
         reset_callback,
     ):
@@ -25,13 +26,14 @@ class CameraSegmentsDialog:
         self.apply_callback = apply_callback
         self.stabilize_callback = stabilize_callback
         self.clean_plate_callback = clean_plate_callback
+        self.normalize_callback = normalize_callback
         self.preview_callback = preview_callback
         self.reset_callback = reset_callback
         self.current_range = current_range
         self.segments = []
         self.window = tk.Toplevel(parent)
         self.window.title("Posicionamentos de câmera")
-        self.window.geometry("760x590")
+        self.window.geometry("900x630")
         self.window.minsize(620, 460)
         self.window.transient(parent)
         self.window.configure(bg="#17131f")
@@ -159,9 +161,11 @@ class CameraSegmentsDialog:
             font=("Segoe UI", 10, "bold"),
             fg="#f5f3f7",
             bg="#241c31",
-        ).pack(side=tk.LEFT, padx=(0, 10))
+        ).pack(anchor=tk.W, pady=(0, 8))
+        action_buttons = tk.Frame(segment_actions, bg="#241c31")
+        action_buttons.pack(fill=tk.X)
         tk.Button(
-            segment_actions,
+            action_buttons,
             text="Estabilizar posicionamento",
             command=self._stabilize,
             bg="#352a45",
@@ -171,7 +175,7 @@ class CameraSegmentsDialog:
             pady=7,
         ).pack(side=tk.LEFT, padx=4)
         tk.Button(
-            segment_actions,
+            action_buttons,
             text="Criar placa limpa",
             command=self._clean_plate,
             bg="#a855f7",
@@ -181,7 +185,17 @@ class CameraSegmentsDialog:
             pady=7,
         ).pack(side=tk.LEFT, padx=4)
         tk.Button(
-            segment_actions,
+            action_buttons,
+            text="Normalizar luz/contraste",
+            command=self._normalize,
+            bg="#352a45",
+            fg="white",
+            relief=tk.FLAT,
+            padx=12,
+            pady=7,
+        ).pack(side=tk.LEFT, padx=4)
+        tk.Button(
+            action_buttons,
             text="Pré-renderizar",
             command=self._preview,
             bg="#352a45",
@@ -269,6 +283,12 @@ class CameraSegmentsDialog:
         segment = self._selected()
         if segment:
             self.preview_callback(segment)
+            self.window.destroy()
+
+    def _normalize(self):
+        segment = self._selected()
+        if segment:
+            self.normalize_callback(segment)
             self.window.destroy()
 
     def _reset(self):

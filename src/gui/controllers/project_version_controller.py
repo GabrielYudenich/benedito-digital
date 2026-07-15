@@ -225,6 +225,17 @@ class ProjectVersionController:
                 "previous_auto_stabilization",
                 os.path.join(editor.auto_stab_dir, info["filename"]),
             ),
+            (
+                "previous_tone_normalization",
+                os.path.join(
+                    getattr(
+                        editor,
+                        "tone_normalized_dir",
+                        os.path.join(os.path.dirname(editor.restored_dir), "tone_normalized"),
+                    ),
+                    info["filename"],
+                ),
+            ),
             ("previous_upscale", os.path.join(editor.upscaled_dir, info["filename"])),
         ]
         layers_root = Path(editor.clean_plate_layers_dir)
@@ -290,6 +301,10 @@ class ProjectVersionController:
             ("restauração", Path(editor.restored_dir)),
             ("estabilização manual", Path(editor.manual_stab_dir)),
             ("estabilização automática", Path(editor.auto_stab_dir)),
+            (
+                "normalização tonal",
+                Path(getattr(editor, "tone_normalized_dir", worktree / "tone_normalized")),
+            ),
             ("upscale", Path(editor.upscaled_dir)),
             ("máscaras manuais", Path(editor.masks_dir)),
             ("máscaras automáticas", Path(editor.auto_masks_dir)),
@@ -403,6 +418,14 @@ class ProjectVersionController:
                     os.path.join(editor.restored_dir, filename),
                     os.path.join(editor.manual_stab_dir, filename),
                     os.path.join(editor.auto_stab_dir, filename),
+                    os.path.join(
+                        getattr(
+                            editor,
+                            "tone_normalized_dir",
+                            os.path.join(os.path.dirname(editor.restored_dir), "tone_normalized"),
+                        ),
+                        filename,
+                    ),
                     os.path.join(editor.upscaled_dir, filename),
                     editor._mask_path_for_frame(frame_path),
                     editor._legacy_mask_path_for_frame(frame_path),
