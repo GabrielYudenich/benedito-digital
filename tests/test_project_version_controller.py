@@ -238,3 +238,110 @@ def test_total_reset_removes_only_derived_branch_files(monkeypatch, tmp_path):
     assert editor.workspace.operations[-1][1]["payload"]["removed_files"] == 9
     assert editor.view_mode == "original"
     assert editor.shown == 1
+
+
+def test_segment_reset_preserves_results_outside_selected_position(monkeypatch, tmp_path):
+    worktree = tmp_path / "worktrees" / "principal"
+    worktree.mkdir(parents=True)
+    frames_dir = tmp_path / "sources" / "frames"
+    frames_dir.mkdir(parents=True)
+    frame_names = [f"frame_{index:06d}.png" for index in range(1, 6)]
+    for frame_name in frame_names:
+        (frames_dir / frame_name).write_bytes(b"original")
+
+    editor = type("Editor", (), {})()
+    editor.workspace = Workspace(worktree)
+    editor._active_job_id = None
+    editor.frame_manager = type(
+        "Frames",
+        (),
+        {"frames": frame_names, "frames_dir": str(frames_dir)},
+    )()
+    for attribute, directory_name in {
+        "restored_dir": "restored",
+        "manual_stab_dir": "stabilized_manual",
+        "auto_stab_dir": "stabilized_auto",
+        "upscaled_dir": "upscaled",
+        "masks_dir": "masks",
+        "auto_masks_dir": "masks_auto",
+        "selections_dir": "selections",
+        "clean_plate_layers_dir": "clean_plate_layers",
+    }.items():
+        directory = worktree / directory_name
+        directory.mkdir()
+        setattr(editor, attribute, str(directory))
+    for frame_name in frame_names:
+        for directory in (
+            Path(editor.restored_dir),
+            Path(editor.manual_stab_dir),
+            Path(editor.auto_stab_dir),
+            Path(editor.upscaled_dir),
+        ):
+            (directory / frame_name).write_bytes(b"derived")
+    layer_composite = Path(editor.clean_plate_layers_dir) / "plate-a" / "composite"
+    layer_composite.mkdir(parents=True)
+    for frame_name in frame_names:
+        (layer_composite / frame_name).write_bytes(b"plate")
+    editor._mask_path_for_frame = lambda path: str(
+        Path(editor.masks_dir) / f"mask_{Path(path).stem}.png"
+    )
+    editor._legacy_mask_path_for_frame = lambda path: str(
+        Path(editor.masks_dir) / f"mask_{Path(path).name}"
+    )
+    editor._auto_mask_path_for_frame = lambda path: str(
+        Path(editor.auto_masks_dir) / f"auto_{Path(path).stem}.png"
+    )
+    editor._selection_path_for_frame = lambda path: str(
+        Path(editor.selections_dir) / f"selection_{Path(path).stem}.png"
+    )
+    editor._current_mask = None
+    editor._current_mask_path = None
+    editor._selection_mask = None
+    editor._selection_frame_path = None
+    editor._clean_plate_layers_cache = None
+    editor.view_mode = "restored"
+    editor.status_var = Value()
+    editor.applied_segment = None
+    editor._apply_camera_segment = lambda segment: setattr(
+        editor, "applied_segment", segment.id
+    )
+
+    class Context:
+        def check_cancelled(self):
+            pass
+
+        def report(self, *_args):
+            pass
+
+    editor._start_ui_job = lambda _title, task, complete: complete(task(Context()))
+    monkeypatch.setattr(
+        "gui.controllers.project_version_controller.messagebox.askyesno",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "gui.controllers.project_version_controller.messagebox.showinfo",
+        lambda *_args, **_kwargs: None,
+    )
+    segment = type(
+        "Segment",
+        (),
+        {"id": "position-1", "name": "Posição 1", "start": 1, "end": 3},
+    )()
+
+    ProjectVersionController(editor).reset_camera_segment_results(segment)
+
+    for directory in (
+        Path(editor.restored_dir),
+        Path(editor.manual_stab_dir),
+        Path(editor.auto_stab_dir),
+        Path(editor.upscaled_dir),
+        layer_composite,
+    ):
+        assert (directory / frame_names[0]).is_file()
+        assert not (directory / frame_names[1]).exists()
+        assert not (directory / frame_names[2]).exists()
+        assert not (directory / frame_names[3]).exists()
+        assert (directory / frame_names[4]).is_file()
+    assert all((frames_dir / frame_name).is_file() for frame_name in frame_names)
+    assert editor.workspace.operations[-1][0] == "camera_segment.reset_results"
+    assert editor.applied_segment == "position-1"

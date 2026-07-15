@@ -17,6 +17,7 @@ class CameraSegmentsDialog:
         stabilize_callback,
         clean_plate_callback,
         preview_callback,
+        reset_callback,
     ):
         self.detect_callback = detect_callback
         self.add_callback = add_callback
@@ -25,12 +26,13 @@ class CameraSegmentsDialog:
         self.stabilize_callback = stabilize_callback
         self.clean_plate_callback = clean_plate_callback
         self.preview_callback = preview_callback
+        self.reset_callback = reset_callback
         self.current_range = current_range
         self.segments = []
         self.window = tk.Toplevel(parent)
         self.window.title("Posicionamentos de câmera")
-        self.window.geometry("760x560")
-        self.window.minsize(620, 430)
+        self.window.geometry("760x590")
+        self.window.minsize(620, 460)
         self.window.transient(parent)
         self.window.configure(bg="#17131f")
 
@@ -128,6 +130,16 @@ class CameraSegmentsDialog:
             padx=12,
             pady=8,
         ).pack(side=tk.LEFT)
+        tk.Button(
+            buttons,
+            text="Resetar resultado",
+            command=self._reset,
+            bg="#7c2d12",
+            fg="white",
+            relief=tk.FLAT,
+            padx=12,
+            pady=8,
+        ).pack(side=tk.LEFT, padx=6)
         tk.Button(
             buttons,
             text="Usar intervalo selecionado",
@@ -257,4 +269,10 @@ class CameraSegmentsDialog:
         segment = self._selected()
         if segment:
             self.preview_callback(segment)
+            self.window.destroy()
+
+    def _reset(self):
+        segment = self._selected()
+        if segment:
+            self.reset_callback(segment)
             self.window.destroy()

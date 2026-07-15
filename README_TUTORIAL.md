@@ -89,37 +89,42 @@ Este guia explica o fluxo principal para restaurar vídeos com qualidade profiss
    restauração e placa limpa passam a usar esse trecho.
 4. No gerenciador, use `Estabilizar posicionamento` para aplicar estabilização automática
    somente ao intervalo selecionado.
-5. Antes de iniciar estabilização ou placa limpa, confirme obrigatoriamente se a operação
+5. Se o resultado de apenas um posicionamento der errado, selecione-o e use
+   `Resetar resultado`. Somente as derivações daquele intervalo serão descartadas; outros
+   posicionamentos, frames extraídos e placas salvas permanecem intactos.
+6. Antes de iniciar estabilização ou placa limpa, confirme obrigatoriamente se a operação
    vale para um posicionamento salvo, para o trecho atual ou para o filme inteiro no corte útil.
-6. Ao concluir, escolha `Pré-renderizar` no mesmo gerenciador para gerar e abrir um MP4
+7. Ao concluir, escolha `Pré-renderizar` no mesmo gerenciador para gerar e abrir um MP4
    curto do posicionamento estabilizado antes do render final.
-7. Para limitar a placa a uma parte do cenário, escolha `Retângulo` ou `Laço` no frame
+8. Para limitar a placa a uma parte do cenário, escolha `Retângulo` ou `Laço` no frame
    representativo, marque o fundo e depois use `Criar placa limpa`.
-8. Abra `Restauração > Criar placa limpa do trecho` — a função também continua disponível
+9. Abra `Restauração > Criar placa limpa do trecho` — a função também continua disponível
    no gerenciador de posicionamentos.
-9. Ative `Usar a seleção atual como recorte em todo o trecho`. O mesmo recorte será
+10. Ative `Usar a seleção atual como recorte em todo o trecho`. O mesmo recorte será
    reutilizado nos frames do segmento, sem depender de uma seleção separada em cada frame.
-10. Escolha o primeiro frame do trecho, o frame atualmente aberto ou a amostra mais nítida
+11. Escolha o primeiro frame do trecho, o frame atualmente aberto ou a amostra mais nítida
     como base visual. A mediana temporal identifica o que é fundo, mas não desfoca a placa.
-11. Use `Reconstruir todo o fundo estático` para um resultado visível, ou o modo conservador
+12. Use `Reconstruir todo o fundo estático` para um resultado visível, ou o modo conservador
     para corrigir somente poeira e riscos. O Benedito cria uma placa RGBA: rostos, braços e
     movimentos detectados ficam transparentes e são protegidos novamente em cada frame.
-12. Se a câmera se mover além do limite seguro, a placa é preservada para inspeção, mas
+13. Se a câmera se mover além do limite seguro, a placa é preservada para inspeção, mas
    não é aplicada automaticamente. Estabilize ou reduza o segmento e tente novamente.
-13. Abra o botão `Placas limpas` ou `Restauração > Gerenciar e editar placas limpas` para
+14. Abra o botão `Placas limpas` ou `Restauração > Gerenciar e editar placas limpas` para
     visualizar a imagem gerada, seu caminho, intervalo e quantos frames foram alterados.
-14. Em `Editar placa`, pinte poeira ou riscos e use `Remover ruído marcado`. Clone e Healing
+15. Em `Editar placa`, pinte poeira ou riscos e use `Remover ruído marcado`. Clone e Healing
     usam o botão direito para definir a origem e o botão esquerdo para aplicar o retoque.
-15. Use `Tornar transparente` para retirar pessoas, objetos ou áreas inseguras da placa. O
+16. Use `Tornar transparente` para retirar pessoas, objetos ou áreas inseguras da placa. O
     quadriculado mostra o alpha removido. `Manter como fundo` devolve uma área à placa.
-16. Salve a placa e escolha `Reaplicar ao trecho`, confirmando novamente fundo completo ou
-    somente defeitos. A imagem gerada originalmente fica preservada em `plate_original.png`.
-17. A aplicação cria uma camada não destrutiva, sem sobrescrever o frame original ou a
+17. Ao salvar, confirme `Sim` quando o Benedito perguntar se deve reaplicar. A placa e o alpha
+    são definições; a layer antiga é desativada imediatamente e os composites só voltam a ser
+    usados depois da reaplicação. A imagem original fica preservada em `plate_original.png`.
+18. A aplicação cria uma camada não destrutiva, sem sobrescrever o frame original ou a
     estabilização. Se algum movimento ficar escondido, navegue até o frame, abra `Placas limpas`
     e escolha `Corrigir movimento no frame atual...`.
-18. No editor de camada, pinte com `Revelar frame original` sobre a pessoa ou objeto apagado.
+19. Também é possível abrir diretamente `Restauração > Corrigir camada da placa no frame atual`.
+    Pinte com `Revelar frame original` sobre a pessoa ou objeto apagado.
     Use `Restaurar camada da placa` para desfazer partes da revelação e salve a correção.
-19. Placas criadas antes deste fluxo aparecem como antigas no gerenciador. Use `Recriar placa`
+20. Placas criadas antes deste fluxo aparecem como antigas no gerenciador. Use `Recriar placa`
     para repetir exatamente o intervalo com a nova base nítida e a máscara suavizada.
 
 **7. Restaurar**

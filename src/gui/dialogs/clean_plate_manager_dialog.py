@@ -196,7 +196,7 @@ class CleanPlateManagerDialog:
         )
         layer_status = (
             "Camada não destrutiva: ativa — correções podem revelar o original\n"
-            if record.layer_metadata_path
+            if record.layer_metadata_path and record.layer_metadata_path.is_file()
             else "Camada não destrutiva: ainda não aplicada\n"
         )
         self.details_var.set(
@@ -227,15 +227,27 @@ class CleanPlateManagerDialog:
         record = self.selected_record()
         if record is None:
             return
-        self.edit_callback(record, self.window, self._plate_edited)
+        self.edit_callback(
+            record,
+            self.window,
+            lambda reapply=False, edited_record=record: self._plate_edited(
+                edited_record, reapply
+            ),
+        )
 
-    def _plate_edited(self):
+    def _plate_edited(self, record, reapply=False):
         self._show_selected()
         item = self.tree.selection()
         if item:
             values = list(self.tree.item(item[0], "values"))
             values[3] = "Sim"
             self.tree.item(item[0], values=values)
+        if reapply:
+            CleanPlateApplicationDialog(
+                self.window,
+                record,
+                lambda mode: self.reapply_callback(record, mode),
+            )
 
     def _reapply(self):
         record = self.selected_record()
@@ -896,11 +908,14 @@ class CleanPlateEditorDialog:
         except Exception as exc:
             messagebox.showerror("Salvar placa", str(exc), parent=self.window)
             return
-        if self.on_saved:
-            self.on_saved()
+        parent = self.window.master
         self.window.destroy()
-        messagebox.showinfo(
+        reapply = messagebox.askyesno(
             "Placa salva",
-            "A placa editada foi salva. Use “Reaplicar ao trecho” para atualizar os frames.",
-            parent=self.window.master,
+            "A placa e sua transparência foram salvas.\n\n"
+            "Os frames já aplicados ainda usam o composite anterior. Deseja reaplicar "
+            "a placa ao trecho agora?",
+            parent=parent,
         )
+        if self.on_saved:
+            self.on_saved(reapply)

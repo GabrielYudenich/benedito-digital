@@ -451,6 +451,10 @@ class EditorScreen:
             command=self.open_clean_plate_manager,
         )
         restoration_menu.add_command(
+            label="Corrigir camada da placa no frame atual...",
+            command=self.open_current_clean_plate_layer_correction,
+        )
+        restoration_menu.add_command(
             label="Estabilizar trecho ativo",
             command=self.apply_auto_stabilization_range,
             accelerator=self.shortcut_preferences.get("stabilize"),
@@ -6985,6 +6989,7 @@ class EditorScreen:
             self._stabilize_camera_segment,
             self._clean_plate_camera_segment,
             self._preview_camera_segment,
+            self._reset_camera_segment,
         )
 
     def _detect_camera_segments(self, dialog):
@@ -7107,6 +7112,9 @@ class EditorScreen:
         os.makedirs(preview_dir, exist_ok=True)
         output_path = os.path.join(preview_dir, f"{safe_name}_preview.mp4")
         self.preview_from_frames_action(output_path=output_path, open_when_done=True)
+
+    def _reset_camera_segment(self, segment):
+        self.version_controller.reset_camera_segment_results(segment)
 
     def _choose_processing_scope(self, operation_name, suggested_segment=None):
         total = len(self.frame_manager.frames) if self.frame_manager else 0
@@ -7238,6 +7246,34 @@ class EditorScreen:
             self._open_clean_plate_reveal_editor,
         )
 
+    def open_current_clean_plate_layer_correction(self):
+        info = self.frame_manager.get_current_frame_info() if self.frame_manager else None
+        if not info:
+            return
+        candidates = []
+        for record in self._clean_plate_records():
+            if not record.start <= info["index"] <= record.end:
+                continue
+            paths = self._clean_plate_layer_directories(record.plate_id)
+            composite = os.path.join(paths["composite"], info["filename"])
+            if os.path.isfile(composite):
+                modified = (
+                    record.layer_metadata_path.stat().st_mtime
+                    if record.layer_metadata_path
+                    and record.layer_metadata_path.is_file()
+                    else 0
+                )
+                candidates.append((modified, record))
+        if not candidates:
+            messagebox.showinfo(
+                "Camada da placa",
+                "O frame atual não possui uma camada de placa aplicada. Reaplique a placa "
+                "ao trecho antes de usar o pincel de revelação.",
+            )
+            return
+        _modified, record = max(candidates, key=lambda item: item[0])
+        self._open_clean_plate_reveal_editor(record)
+
     def _rebuild_clean_plate(self, record):
         self.range_start_var.set(str(record.start + 1))
         self.range_end_var.set(str(record.end + 1))
@@ -7267,6 +7303,11 @@ class EditorScreen:
             str(transparent_path), make_transparent_plate(plate, static_mask)
         ):
             raise RuntimeError("Não foi possível atualizar a placa transparente")
+        layer_paths = self._clean_plate_layer_directories(record.plate_id)
+        layer_invalidated = os.path.isfile(layer_paths["metadata"])
+        if layer_invalidated:
+            os.remove(layer_paths["metadata"])
+        self._clean_plate_layers_cache = None
         if self.workspace:
             self.workspace.commit_operation(
                 "clean_plate.edit",
@@ -7275,6 +7316,7 @@ class EditorScreen:
                     "source": record.source,
                     "start": record.start,
                     "end": record.end,
+                    "layer_invalidated": layer_invalidated,
                 },
                 artifacts={
                     "plate": record.plate_path,
@@ -7289,8 +7331,9 @@ class EditorScreen:
                 },
             )
         self.status_var.set(
-            f"Placa {record.plate_id} editada — reaplique para atualizar os frames"
+            f"Placa {record.plate_id} editada — layer anterior desativada até a reaplicação"
         )
+        self.show_current_frame()
 
     def _open_clean_plate_reveal_editor(self, record, parent=None):
         info = self.frame_manager.get_current_frame_info() if self.frame_manager else None

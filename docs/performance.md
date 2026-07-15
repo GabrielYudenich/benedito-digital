@@ -94,6 +94,11 @@ pessoa ou objeto que tenha sido coberto por engano; preview, segunda tela e rend
 correção automaticamente. Uma seleção espacial pode ser reutilizada como recorte em todo o
 segmento, evitando centenas de máscaras repetidas.
 
+Editar a imagem ou o alpha da placa não regrava silenciosamente centenas de composites. Ao
+salvar, o editor desativa a layer obsoleta e pergunta se a placa deve ser reaplicada ao trecho.
+O reset de posicionamento remove apenas as derivações dos frames daquele intervalo e limpa
+checkpoints incompatíveis.
+
 A reprodução da aba Frames é silenciosa e limitada ao trecho ativo. Ela usa o FPS conhecido
 da referência, permite `0.25x`, `0.5x`, `1x`, `2x` e `4x` e pula posições intermediárias se
 a decodificação de PNGs grandes não acompanhar o relógio, mantendo a interface responsiva.

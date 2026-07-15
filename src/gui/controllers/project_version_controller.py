@@ -367,6 +367,108 @@ class ProjectVersionController:
             "Resetar resultados para o original", reset_task, reset_complete
         )
 
+    def reset_camera_segment_results(self, segment):
+        editor = self.editor
+        if not self._workspace_available() or not editor.frame_manager:
+            return
+        if not messagebox.askyesno(
+            "Resetar posicionamento",
+            f"Descartar somente os resultados de {segment.name} — frames "
+            f"{segment.start + 1}–{segment.end + 1}?\n\n"
+            "Outros posicionamentos, os frames extraídos e as placas salvas serão preservados.",
+        ):
+            return
+        stop_review = getattr(editor, "stop_frame_review", None)
+        if stop_review is not None:
+            stop_review(silent=True)
+
+        frames = list(editor.frame_manager.frames)
+        if not frames:
+            return
+        start = max(0, min(int(segment.start), len(frames) - 1))
+        end = max(start, min(int(segment.end), len(frames) - 1))
+        frames_dir = editor.frame_manager.frames_dir
+        layer_roots = []
+        layers_dir = Path(editor.clean_plate_layers_dir)
+        if layers_dir.is_dir():
+            layer_roots = [path for path in layers_dir.iterdir() if path.is_dir()]
+
+        def reset_task(context):
+            removed_files = 0
+            for position, frame_index in enumerate(range(start, end + 1)):
+                context.check_cancelled()
+                filename = frames[frame_index]
+                frame_path = os.path.join(frames_dir, filename)
+                paths = [
+                    os.path.join(editor.restored_dir, filename),
+                    os.path.join(editor.manual_stab_dir, filename),
+                    os.path.join(editor.auto_stab_dir, filename),
+                    os.path.join(editor.upscaled_dir, filename),
+                    editor._mask_path_for_frame(frame_path),
+                    editor._legacy_mask_path_for_frame(frame_path),
+                    editor._auto_mask_path_for_frame(frame_path),
+                    editor._selection_path_for_frame(frame_path),
+                ]
+                for layer_root in layer_roots:
+                    paths.extend(
+                        str(layer_root / kind / filename)
+                        for kind in ("composite", "corrected", "reveal_masks")
+                    )
+                for path in paths:
+                    if os.path.isfile(path):
+                        os.remove(path)
+                        removed_files += 1
+                context.report(
+                    (position + 1) * 95.0 / (end - start + 1),
+                    f"Resetando {segment.name} — {position + 1}/{end - start + 1}",
+                )
+
+            checkpoints = Path(editor.workspace.branch_worktree()) / ".jobs"
+            if checkpoints.is_dir():
+                shutil.rmtree(checkpoints)
+            checkpoints.mkdir(parents=True, exist_ok=True)
+            editor.workspace.commit_operation(
+                "camera_segment.reset_results",
+                payload={
+                    "id": segment.id,
+                    "name": segment.name,
+                    "start": start,
+                    "end": end,
+                    "removed_files": removed_files,
+                    "target": "extracted_original_frames",
+                },
+            )
+            context.report(100, f"{segment.name} restaurado aos frames originais")
+            return removed_files
+
+        def reset_complete(removed_files):
+            editor._current_mask = None
+            editor._current_mask_path = None
+            editor._selection_mask = None
+            editor._selection_frame_path = None
+            editor._clean_plate_layers_cache = None
+            if hasattr(editor, "_review_preview_cache"):
+                editor._review_preview_cache.clear()
+            if hasattr(editor, "_review_preview_order"):
+                editor._review_preview_order.clear()
+            retouch_controller = getattr(editor, "retouch_controller", None)
+            if retouch_controller is not None:
+                retouch_controller.reset_for_branch()
+            editor.view_mode = "original"
+            editor._apply_camera_segment(segment)
+            editor.status_var.set(
+                f"{segment.name} resetado — {removed_files} arquivos derivados removidos"
+            )
+            messagebox.showinfo(
+                "Posicionamento resetado",
+                f"{segment.name} voltou aos frames extraídos do filme original.\n\n"
+                f"Arquivos derivados removidos: {removed_files}.",
+            )
+
+        editor._start_ui_job(
+            f"Resetar {segment.name}", reset_task, reset_complete
+        )
+
     def _workspace_available(self) -> bool:
         editor = self.editor
         if editor._active_job_id:
